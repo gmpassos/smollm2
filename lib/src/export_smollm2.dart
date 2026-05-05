@@ -59,7 +59,7 @@ class HFConfig {
 
 class HFTokenizer {
   final List<String> vocab;
-  final List<String> merges;
+  final List<(String, String)> merges;
 
   HFTokenizer(this.vocab, this.merges);
 
@@ -67,7 +67,34 @@ class HFTokenizer {
     final jsonMap = jsonDecode(await File(path).readAsString());
     final model = jsonMap['model'] as Map<String, dynamic>;
     final vocabMap = model['vocab'] as Map<String, dynamic>;
-    final merges = (model['merges'] as List).cast<String>();
+    final mergesGeneric = (model['merges'] as List);
+
+    final List<(String, String)> merges = mergesGeneric.map((e) {
+      if (e is List) {
+        if (e.length == 2) {
+          return (e[0].toString(), e[1].toString());
+        } else {
+          throw StateError(
+            "Can't parse Tokenizer `merges` List entry of length: ${e.length}",
+          );
+        }
+      } else if (e is String) {
+        var idx = e.indexOf(' ');
+        if (idx >= 0) {
+          var a = e.substring(0, idx);
+          var b = e.substring(idx + 1);
+          return (a, b);
+        } else {
+          throw StateError(
+            "Can't parse Tokenizer `merges` String entry: <<$e>>",
+          );
+        }
+      } else {
+        throw StateError(
+          "Can't parse Tokenizer `merges` entry (${e.runtimeType}): <<$e>>",
+        );
+      }
+    }).toList();
 
     final vocab = List<String>.filled(vocabMap.length, '');
 
@@ -574,15 +601,26 @@ class TensorRepositoryLoader {
       return SafeTensorFileRepository.load(modelPath);
     }
 
-    // Case 2: sharded model index
-    final indexPath = '$modelPath.index.json';
-    final indexFile = File(indexPath);
+    final possibleIndexPaths = [
+      '$modelPath.safetensors.index.json',
+      '$modelPath.index.json',
+    ];
 
-    if (!await indexFile.exists()) {
+    var indexPaths = await Future.wait(
+      possibleIndexPaths.map((fp) async {
+        var f = File(fp);
+        var exists = await f.exists();
+        return (f, exists);
+      }),
+    );
+
+    // Case 2: sharded model index
+    var indexFile = indexPaths.firstWhereOrNull((e) => e.$2)?.$1;
+    if (indexFile == null) {
       throw ArgumentError('Model not found as file or shard index: $modelPath');
     }
 
-    return SafeTensorShardRepository.load(indexPath);
+    return SafeTensorShardRepository.load(indexFile.path);
   }
 }
 
@@ -639,7 +677,8 @@ class SmolLM2Exporter {
     }
 
     for (final m in tokenizer.merges) {
-      w.writeString(m);
+      w.writeString(m.$1);
+      w.writeString(m.$2);
     }
   }
 

@@ -136,7 +136,11 @@ class SmolLM2 {
     final mergesLength = dataReader.readU32();
 
     final vocab = List.generate(vocabLength, (_) => dataReader.readString());
-    final merges = List.generate(mergesLength, (_) => dataReader.readString());
+    final merges = List.generate(mergesLength, (_) {
+      var a = dataReader.readString();
+      var b = dataReader.readString();
+      return (a, b);
+    });
 
     tokenizer = Tokenizer(vocab: vocab, merges: merges);
     print(tokenizer);

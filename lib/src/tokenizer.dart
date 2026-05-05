@@ -3,7 +3,7 @@ class Tokenizer {
   final int numMerges;
 
   final List<String> vocab;
-  final List<String> merges;
+  final List<(String, String)> merges;
 
   final Map<String, int> vocabMap = {};
   final List<MergePair> mergePairs = [];
@@ -24,14 +24,8 @@ class Tokenizer {
 
   void _buildMergePairs() {
     for (final merge in merges) {
-      final sp = merge.indexOf(' ');
-      if (sp < 0) {
-        continue;
-      }
-
-      var a = merge.substring(0, sp);
-      var b = merge.substring(sp + 1);
-
+      var a = merge.$1;
+      var b = merge.$2;
       mergePairs.add(MergePair(a, b));
     }
   }
