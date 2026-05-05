@@ -99,7 +99,6 @@ void main() {
         tokensText.add(tokenText);
         tokensOrigin.add(origin.name);
         stdout.write(tokenText);
-        stdout.flush();
       }
 
       var result = await smollm.generate(
