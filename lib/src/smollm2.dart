@@ -8,10 +8,11 @@ import 'config.dart';
 import 'data.dart';
 import 'kv_cache.dart';
 import 'quant_type.dart';
+import 'token_generator.dart';
 import 'tokenizer.dart';
 import 'weights.dart';
 
-class SmolLM2 {
+class SmolLM2 implements TokenGenerator {
   late final Config config;
   late final Tokenizer tokenizer;
 
@@ -644,13 +645,15 @@ class SmolLM2 {
     return _randomSecure.nextInt(0x7fffffff);
   }
 
-  Future<String> generate(
+  @override
+  Future<TokenGenerationResult> generate(
     String prompt, {
-    int maxTokens = 1024 * 2,
-    double temperature = 0.0,
-    double repeatPenalty = 1.09,
+    int maxTokens = TokenGenerator.defaultMaxTokens,
+    double temperature = TokenGenerator.defaultTemperature,
+    double repeatPenalty = TokenGenerator.defaultRepeatPenalty,
     int? seed,
     bool includePromptInOutput = true,
+    OnTokenEmitted? onTokenEmitted,
     math.Random? random,
   }) async {
     seed ??= generateSeed();
@@ -668,9 +671,6 @@ class SmolLM2 {
 
     resetCache();
 
-    stdout.write(prompt);
-    await stdout.flush();
-
     final seen = <int, int>{};
 
     Float32List? logits;
@@ -682,10 +682,17 @@ class SmolLM2 {
       final tok = toks[i];
       logits = forward(tok, i);
       seen.increment(tok);
+
+      if (onTokenEmitted != null) {
+        var s = decode(tok);
+        onTokenEmitted(tok, s, TokenOrigin.prompt);
+      }
     }
 
     promptStart.stop();
+    final promptDuration = promptStart.elapsed;
 
+    var stopReason = TokenGenerationStopReason.maxTokensReached;
     int generatedTokens = 0;
     final genWatch = Stopwatch()..start();
 
@@ -699,12 +706,19 @@ class SmolLM2 {
         random,
       );
       if (next == 2) {
+        stopReason = TokenGenerationStopReason.eosToken;
+        if (onTokenEmitted != null) {
+          onTokenEmitted(next, '', TokenOrigin.eos);
+        }
         break;
       }
 
       var s = decode(next);
+
+      if (onTokenEmitted != null) {
+        onTokenEmitted(next, s, TokenOrigin.generated);
+      }
       output.write(s);
-      stdout.write(s);
 
       generatedTokens++;
       seen.increment(next);
@@ -712,32 +726,39 @@ class SmolLM2 {
       logits = forward(next, toks.length + i);
     }
 
-    genWatch.stop();
+    if (stopReason == TokenGenerationStopReason.maxTokensReached &&
+        onTokenEmitted != null) {
+      onTokenEmitted(0, '', TokenOrigin.maxTokensReached);
+    }
 
-    stdout.writeln();
-    await stdout.flush();
+    genWatch.stop();
+    final genDuration = genWatch.elapsed;
 
     final promptTokens = toks.length;
     final totalTokens = promptTokens + generatedTokens;
 
-    final promptSecs = promptStart.elapsedMicroseconds / 1000000.0;
-    final genSecs = genWatch.elapsedMicroseconds / 1000000.0;
+    final promptSecs = promptDuration.inMicroseconds / 1000000.0;
+    final genSecs = genDuration.inMicroseconds / 1000000.0;
 
     final promptTks = promptSecs == 0 ? 0.0 : promptTokens / promptSecs;
     final genTks = genSecs == 0 ? 0.0 : generatedTokens / genSecs;
 
-    print('');
-    print('--- stats ---');
-    print('prompt tokens    : $promptTokens');
-    print('generated tokens : $generatedTokens');
-    print('total tokens     : $totalTokens');
-    print(
-      'prompt ingest    : ${promptSecs.toStringAsFixed(3)} s (${promptTks.toStringAsFixed(2)} tk/s)',
+    return TokenGenerationResult(
+      prompt: prompt,
+      output: output.toString(),
+      seed: seed,
+      maxTokens: maxTokens,
+      temperature: temperature,
+      repeatPenalty: repeatPenalty,
+      promptTokens: promptTokens,
+      generatedTokens: generatedTokens,
+      totalTokens: totalTokens,
+      promptDuration: promptDuration,
+      generationDuration: genDuration,
+      totalDuration: promptDuration + genDuration,
+      promptTokensPerSecond: promptTks,
+      generatedTokensPerSecond: genTks,
+      stopReason: stopReason,
     );
-    print(
-      'generation       : ${genSecs.toStringAsFixed(3)} s (${genTks.toStringAsFixed(2)} tk/s)',
-    );
-
-    return output.toString();
   }
 }

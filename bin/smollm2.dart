@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:smollm2/smollm2.dart';
 
 Future<void> main(List<String> args) async {
@@ -52,13 +54,20 @@ Future<void> main(List<String> args) async {
 
   print('---------------------------------------------------------');
 
-  await m.generate(
+  var genResults = await m.generate(
     prompt,
     maxTokens: maxTokens,
     temperature: temperature,
     repeatPenalty: repeatPenalty,
     seed: seed,
+    onTokenEmitted: (t, s, o) {
+      stdout.write(s);
+    },
   );
+
+  print('\n---------------------------------------------------------');
+
+  print(genResults.statsSummary());
 
   // await Future.delayed(Duration(hours: 10));
 }

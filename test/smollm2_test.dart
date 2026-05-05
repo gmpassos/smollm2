@@ -1,6 +1,7 @@
 @Timeout(Duration(minutes: 5))
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:huggingface_downloader/huggingface_downloader.dart';
@@ -70,6 +71,9 @@ void main() {
 
       expect(outputBinFile.existsSync(), isTrue);
 
+      print('---------------------------------------------------');
+      print('Loading `SmolLM2`: ${outputBinFile.path} ...');
+
       // ------------------------------------------------------------
       // Step 3: Load model into Dart inference engine
       // ------------------------------------------------------------
@@ -84,22 +88,163 @@ void main() {
 
       print('---------------------------------------------------');
 
-      var output = await smollm.generate(
+      var tokensEmitted =
+          <(int tokenId, String tokenText, TokenOrigin origin)>[];
+
+      var tokensText = <String>[];
+      var tokensOrigin = <String>[];
+
+      void onTokenEmitted(int tokenId, String tokenText, TokenOrigin origin) {
+        tokensEmitted.add((tokenId, tokenText, origin));
+        tokensText.add(tokenText);
+        tokensOrigin.add(origin.name);
+        stdout.write(tokenText);
+        stdout.flush();
+      }
+
+      var result = await smollm.generate(
         prompt,
         maxTokens: 40,
         temperature: 0.8,
         repeatPenalty: 1.1,
         seed: 12345,
+        onTokenEmitted: onTokenEmitted,
+      );
+
+      await stdout.flush();
+
+      print('\n---------------------------------------------------');
+
+      print('tokensText:');
+      print(json.encode(tokensText));
+      print('');
+      print('tokensOrigin:');
+      print(json.encode(tokensOrigin));
+      print('');
+
+      expect(result.prompt, equals(prompt));
+      expect(result.maxTokens, equals(40));
+      expect(result.temperature, equals(0.8));
+      expect(result.repeatPenalty, equals(1.1));
+      expect(result.seed, equals(12345));
+
+      expect(
+        result.stopReason,
+        equals(TokenGenerationStopReason.maxTokensReached),
       );
 
       expect(
-        output,
+        result.output,
         equals(
           'The capital of France is Paris. Paris, the City of Light, '
           'is a major center for art and culture, with many iconic '
           'landmarks such as the Eiffel Tower, Notre-Dame Cathedral, '
           'and Louvre Museum.',
         ),
+      );
+
+      expect(
+        tokensText,
+        equals([
+          "The",
+          " capital",
+          " of",
+          " France",
+          " is",
+          " Paris",
+          ".",
+          " Paris",
+          ",",
+          " the",
+          " City",
+          " of",
+          " Light",
+          ",",
+          " is",
+          " a",
+          " major",
+          " center",
+          " for",
+          " art",
+          " and",
+          " culture",
+          ",",
+          " with",
+          " many",
+          " iconic",
+          " landmarks",
+          " such",
+          " as",
+          " the",
+          " E",
+          "iffel",
+          " Tower",
+          ",",
+          " Notre",
+          "-",
+          "D",
+          "ame",
+          " Cathedral",
+          ",",
+          " and",
+          " Lou",
+          "vre",
+          " Museum",
+          ".",
+          "",
+        ]),
+      );
+
+      expect(
+        tokensOrigin,
+        equals([
+          "prompt",
+          "prompt",
+          "prompt",
+          "prompt",
+          "prompt",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "generated",
+          "maxTokensReached",
+        ]),
       );
     } finally {
       // ------------------------------------------------------------
