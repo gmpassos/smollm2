@@ -33,7 +33,6 @@ No Python runtime, no llama.cpp dependency, and no external native bindings are 
 * 🔧 Programmatic API for Dart apps
 
 ---
-
 ## TL;DR - I just want to chat with a local LLM
 
 ### If you don’t have Dart SDK yet
@@ -44,13 +43,13 @@ Go to: [https://dart.dev/get-dart](https://dart.dev/get-dart)
 
 ### Install required tools
 
-**Installs the Hugging Face model downloader CLI used to fetch SmolLM2 checkpoints**
+**Install the Hugging Face model downloader CLI used to fetch SmolLM2 checkpoints:**
 
 ```bash
 dart pub global activate huggingface_downloader
 ```
 
-**Installs the SmolLM2 CLI used for export and local inference**
+**Install the SmolLM2 CLI used for export and local inference (provides `smollm2` and `export_smollm2`):**
 
 ```bash
 dart pub global activate smollm2
@@ -82,7 +81,7 @@ huggingface_downloader \
 
 ### Export model to SMOL format (Q16)
 
-**Converts Hugging Face checkpoint into a high-precision single binary (Q16) for better output quality**
+**Convert Hugging Face checkpoint into a high-precision single binary (Q16) for better output quality. This generates a `*-q16.bin` file inside the folder:**
 
 ```bash
 export_smollm2 -Q16 models/smollm2-135m/
@@ -98,7 +97,7 @@ export_smollm2 -Q16 models/smollm2-360m/
 
 ### Start chat
 
-**Run the interactive local chat interface using the exported model (choose the one you downloaded and exported):**
+**Run the interactive local chat interface using the exported model (use the model you exported):**
 
 **135M model**
 
