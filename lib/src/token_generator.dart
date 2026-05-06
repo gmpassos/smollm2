@@ -19,7 +19,25 @@ enum TokenOrigin {
   eos,
 
   /// Generation stopped because the configured maximum token count was reached.
-  maxTokensReached,
+  maxTokensReached;
+
+  /// Whether this emitted token marks the end of generation.
+  ///
+  /// Returns `true` for terminal emission events such as:
+  /// - [TokenOrigin.eos]: the model emitted the end-of-sequence token.
+  /// - [TokenOrigin.maxTokensReached]: generation stopped because the
+  ///   configured maximum number of output tokens was reached.
+  ///
+  /// Returns `false` for normal prompt or generated tokens.
+  bool get isTerminal {
+    switch (this) {
+      case TokenOrigin.eos:
+      case TokenOrigin.maxTokensReached:
+        return true;
+      default:
+        return false;
+    }
+  }
 }
 
 /// Callback invoked whenever a token is emitted by the inference engine.
@@ -69,8 +87,11 @@ class TokenGenerationResult {
   /// - prompt + generated completion.
   final String output;
 
-  /// Random seed effectively used during token sampling.
+  /// Random seed used to initialize [random] for token sampling.
   final int seed;
+
+  /// Pseudorandom number generator used during token sampling.
+  final math.Random random;
 
   /// Maximum number of generated tokens requested.
   final int maxTokens;
@@ -113,6 +134,7 @@ class TokenGenerationResult {
     required this.prompt,
     required this.output,
     required this.seed,
+    required this.random,
     required this.maxTokens,
     required this.temperature,
     required this.repeatPenalty,
@@ -178,8 +200,14 @@ abstract class TokenGenerator {
   /// Default sampling temperature.
   static const defaultTemperature = 0.1;
 
+  /// Default sampling temperature for chat sessions.
+  static const defaultChatTemperature = 0.2;
+
   /// Default repeat penalty applied during sampling.
   static const defaultRepeatPenalty = 1.09;
+
+  /// Default repeat penalty applied during chat sessions.
+  static const defaultChatRepeatPenalty = 1.02;
 
   /// Generates text from the given [prompt].
   ///
@@ -189,9 +217,12 @@ abstract class TokenGenerator {
   /// - lower values produce more deterministic output,
   /// - higher values produce more diverse output.
   ///
-  /// [repeatPenalty] discourages repeated token loops.
+  /// [repeatPenalty] discourages repeated token repetition.
   ///
   /// [seed] optionally forces deterministic reproducible sampling.
+  ///
+  /// [emmitPromptTokens] controls whether prompt tokens are also emitted to
+  /// [onTokenEmitted] during prompt ingestion.
   ///
   /// [includePromptInOutput] controls whether [TokenGenerationResult.output]
   /// includes the original prompt text.
@@ -206,6 +237,7 @@ abstract class TokenGenerator {
     double temperature = defaultTemperature,
     double repeatPenalty = defaultRepeatPenalty,
     int? seed,
+    bool emmitPromptTokens = true,
     bool includePromptInOutput = true,
     OnTokenEmitted? onTokenEmitted,
     math.Random? random,

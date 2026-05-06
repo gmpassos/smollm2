@@ -2,7 +2,7 @@ import 'package:smollm2/smollm2.dart';
 
 Future<void> main() async {
   // Create a new SmolLM2 inference engine instance.
-  final smollm = SmolLM2();
+  final smollm = SmolLM2(logger: (o) => print('»» $o'));
 
   // Load the exported SmolLM2 model into memory.
   // In this example we use the 135M Instruct quantized Q16 model.

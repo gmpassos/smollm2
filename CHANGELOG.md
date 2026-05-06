@@ -1,3 +1,34 @@
+## 1.0.4
+
+- Added chat mode support with interactive prompt-response loop in `bin/smollm2.dart`.
+- `bin/smollm2.dart`:
+  - Added command line options `-c` for chat mode and `-nc`/`--no-colored` to disable colored output.
+  - Added colored output for tokens with distinct colors for prompt, generated tokens, EOS, and max tokens reached.
+  - Added `_chatSession` function for interactive chat with system, user, and assistant roles.
+  - Added `_promptComplete` function for single prompt completion with optional colored output.
+- `lib/src/chat.dart`:
+  - Added `ChatSession` and `ChatMessage` classes to manage chat history and build formatted prompts.
+- `lib/src/smollm2.dart`:
+  - Added optional `logger` callback to `SmolLM2` for logging model loading and status messages.
+  - Added detailed logging during model loading steps.
+  - Changed `forward` method to track total and context tokens internally.
+  - Added `totalTokens` and `contextTokens` getters to track tokens processed and cached.
+  - Added `resetCache` method to reset KV caches and token counters.
+  - Added incremental prompt ingestion with `ingest` method supporting partial prompt feeding and token emission.
+  - Refactored `generate` method to use incremental prompt ingestion and track full generated text.
+  - Added internal `_fullText` buffer to accumulate all decoded tokens.
+  - Added internal `_seen` map to track token repetition counts across prompt and generation.
+  - Updated `sample` method to use internal logits and repeat penalty logic.
+- `lib/src/token_generator.dart`:
+  - Added `isTerminal` property to `TokenOrigin` enum to identify terminal token emission events.
+  - Added `random` field to `TokenGenerationResult` to expose RNG used during sampling.
+  - Added default chat-specific temperature and repeat penalty constants.
+  - Added `emmitPromptTokens` parameter to `generate` method to control prompt token emission callbacks.
+- `lib/smollm2.dart`:
+  - Exported new `chat.dart` module for chat session support.
+- `example/smollm2_example.dart`:
+  - Added logger callback to example `SmolLM2` instance for verbose output.
+
 ## 1.0.3
 
 - Added streaming token emission support to `SmolLM2.generate`:

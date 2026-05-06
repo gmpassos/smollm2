@@ -13,6 +13,17 @@ import 'tokenizer.dart';
 import 'weights.dart';
 
 class SmolLM2 implements TokenGenerator {
+  final void Function(Object?)? logger;
+
+  SmolLM2({this.logger});
+
+  void log(Object? o) {
+    final logger = this.logger;
+    if (logger != null) {
+      logger(o);
+    }
+  }
+
   late final Config config;
   late final Tokenizer tokenizer;
 
@@ -38,6 +49,8 @@ class SmolLM2 implements TokenGenerator {
   late final Float32List hb2;
 
   Future<void> load(String modelPath) async {
+    log('Loading model: $modelPath ...');
+
     final modelFile = await File(modelPath).open();
     final dataReader = DataReader(modelFile);
 
@@ -68,7 +81,7 @@ class SmolLM2 implements TokenGenerator {
     hb = Float32List(config.intermediateSize);
     hb2 = Float32List(config.intermediateSize);
 
-    print('** Model loaded');
+    log('Model loaded');
   }
 
   void _buildKVCaches() {
@@ -129,7 +142,7 @@ class SmolLM2 implements TokenGenerator {
       headDim: headDim,
     );
 
-    print(config);
+    log(config);
   }
 
   void _loadTokenizer(DataReader dataReader) {
@@ -144,13 +157,13 @@ class SmolLM2 implements TokenGenerator {
     });
 
     tokenizer = Tokenizer(vocab: vocab, merges: merges);
-    print(tokenizer);
+    log(tokenizer);
   }
 
   void _loadWeights(DataReader dataReader) {
     weights = ModelWeights(config);
     weights.load(config, dataReader);
-    print(weights);
+    log(weights);
   }
 
   void _precomputeRope() {
@@ -173,12 +186,6 @@ class SmolLM2 implements TokenGenerator {
         ropeSin[p * hd + i] = s.toDouble();
         ropeSin[p * hd + hd ~/ 2 + i] = s.toDouble();
       }
-    }
-  }
-
-  void resetCache() {
-    for (final kv in kvCaches) {
-      kv.cacheLen = 0;
     }
   }
 
@@ -272,7 +279,10 @@ class SmolLM2 implements TokenGenerator {
     }
   }
 
-  Float32List forward(final int tok, final int pos) {
+  void forward(final int tok) {
+    final pos = _totalTokens++;
+    _contextTokens++;
+
     final c = config;
     final w = weights;
 
@@ -474,8 +484,6 @@ class SmolLM2 implements TokenGenerator {
 
       logits[i] = sum;
     }
-
-    return logits;
   }
 
   List<int> tokenize(String text, int max) {
@@ -590,13 +598,14 @@ class SmolLM2 implements TokenGenerator {
   }
 
   int sample(
-    Float32List logits,
     int vocab,
     double temperature,
     double repeatPenalty,
     Map<int, int> seen,
     math.Random rand,
   ) {
+    final logits = this.logits;
+
     // Apply repeat penalty:
     for (int i = 0; i < vocab; i++) {
       final count = seen[i] ?? 0;
@@ -645,6 +654,109 @@ class SmolLM2 implements TokenGenerator {
     return _randomSecure.nextInt(0x7fffffff);
   }
 
+  /// Total number of tokens processed by this model instance since the last
+  /// [resetCache] call.
+  ///
+  /// This counter is cumulative and monotonic: every ingested prompt token and
+  /// every generated token increments this value.
+  ///
+  /// Unlike [contextTokens], this value is not limited by the active context
+  /// window and continues growing for the full lifetime of the inference session.
+  int get totalTokens => _totalTokens;
+
+  int _totalTokens = 0;
+
+  /// Number of token positions currently resident in the active transformer
+  /// context (KV cache).
+  ///
+  /// This represents how many past tokens are presently available for attention
+  /// during the next forward pass.
+  ///
+  /// Unlike [totalTokens], this value is bounded by the model's maximum sequence
+  /// length and may be lower if the cache is reset, truncated, or compacted.
+  int get contextTokens => _contextTokens;
+
+  int _contextTokens = 0;
+
+  void resetCache() {
+    for (final kv in kvCaches) {
+      kv.cacheLen = 0;
+    }
+
+    _totalTokens = 0;
+    _contextTokens = 0;
+  }
+
+  StringBuffer? _fullText;
+
+  String get fullText => _fullText?.toString() ?? '';
+
+  int get fullTextLength => _fullText?.length ?? 0;
+
+  Map<int, int>? _seen;
+
+  void reset() {
+    resetCache();
+    _seen = null;
+    _fullText = null;
+  }
+
+  Future<Duration> ingest(
+    String prompt, {
+    bool emmitPromptTokens = true,
+    OnTokenEmitted? onTokenEmitted,
+  }) async {
+    var r = await _ingestImpl(
+      prompt,
+      emmitPromptTokens: emmitPromptTokens,
+      onTokenEmitted: onTokenEmitted,
+    );
+    return r.$2;
+  }
+
+  Future<(List<int> toks, Duration promptDuration)> _ingestImpl(
+    String prompt, {
+    bool emmitPromptTokens = true,
+    OnTokenEmitted? onTokenEmitted,
+  }) async {
+    final toks = tokenize(prompt, 512);
+    if (toks.isEmpty) {
+      throw StateError('Tokenize failed');
+    }
+
+    final StringBuffer fullText;
+    final Map<int, int> seen;
+    if (_seen == null) {
+      fullText = _fullText = StringBuffer();
+      seen = _seen = <int, int>{};
+      resetCache();
+    } else {
+      fullText = _fullText!;
+      seen = _seen!;
+    }
+
+    // Prompt ingestion timing (optional separate metric)
+    final promptStart = Stopwatch()..start();
+
+    for (int i = 0; i < toks.length; i++) {
+      final tok = toks[i];
+      forward(tok);
+      seen.increment(tok);
+
+      var s = decode(tok);
+      fullText.write(s);
+
+      if (onTokenEmitted != null && emmitPromptTokens) {
+        onTokenEmitted(tok, s, TokenOrigin.prompt);
+      }
+    }
+
+    promptStart.stop();
+    final promptDuration = promptStart.elapsed;
+
+    return (toks, promptDuration);
+  }
+
   @override
   Future<TokenGenerationResult> generate(
     String prompt, {
@@ -652,6 +764,7 @@ class SmolLM2 implements TokenGenerator {
     double temperature = TokenGenerator.defaultTemperature,
     double repeatPenalty = TokenGenerator.defaultRepeatPenalty,
     int? seed,
+    bool emmitPromptTokens = true,
     bool includePromptInOutput = true,
     OnTokenEmitted? onTokenEmitted,
     math.Random? random,
@@ -664,47 +777,29 @@ class SmolLM2 implements TokenGenerator {
       output.write(prompt);
     }
 
-    final toks = tokenize(prompt, 512);
-    if (toks.isEmpty) {
-      throw StateError('Tokenize failed');
-    }
+    final (toks, promptDuration) = await _ingestImpl(
+      prompt,
+      onTokenEmitted: onTokenEmitted,
+      emmitPromptTokens: emmitPromptTokens,
+    );
 
-    resetCache();
-
-    final seen = <int, int>{};
-
-    Float32List? logits;
-
-    // Prompt ingestion timing (optional separate metric)
-    final promptStart = Stopwatch()..start();
-
-    for (int i = 0; i < toks.length; i++) {
-      final tok = toks[i];
-      logits = forward(tok, i);
-      seen.increment(tok);
-
-      if (onTokenEmitted != null) {
-        var s = decode(tok);
-        onTokenEmitted(tok, s, TokenOrigin.prompt);
-      }
-    }
-
-    promptStart.stop();
-    final promptDuration = promptStart.elapsed;
+    final fullText = _fullText!;
+    final seen = _seen!;
 
     var stopReason = TokenGenerationStopReason.maxTokensReached;
     int generatedTokens = 0;
+
     final genWatch = Stopwatch()..start();
 
     for (int i = 0; i < maxTokens; i++) {
       final next = sample(
-        logits!,
         config.vocabSize,
         temperature,
         repeatPenalty,
         seen,
         random,
       );
+
       if (next == 2) {
         stopReason = TokenGenerationStopReason.eosToken;
         if (onTokenEmitted != null) {
@@ -714,6 +809,7 @@ class SmolLM2 implements TokenGenerator {
       }
 
       var s = decode(next);
+      fullText.write(s);
 
       if (onTokenEmitted != null) {
         onTokenEmitted(next, s, TokenOrigin.generated);
@@ -723,7 +819,7 @@ class SmolLM2 implements TokenGenerator {
       generatedTokens++;
       seen.increment(next);
 
-      logits = forward(next, toks.length + i);
+      forward(next);
     }
 
     if (stopReason == TokenGenerationStopReason.maxTokensReached &&
@@ -747,6 +843,7 @@ class SmolLM2 implements TokenGenerator {
       prompt: prompt,
       output: output.toString(),
       seed: seed,
+      random: random,
       maxTokens: maxTokens,
       temperature: temperature,
       repeatPenalty: repeatPenalty,
