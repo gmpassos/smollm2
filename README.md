@@ -34,6 +34,84 @@ No Python runtime, no llama.cpp dependency, and no external native bindings are 
 
 ---
 
+## TL;DR - I just want to chat with a local LLM
+
+### If you don’t have Dart SDK yet
+
+Go to: [https://dart.dev/get-dart](https://dart.dev/get-dart)
+
+---
+
+### Install required tools
+
+**Installs the Hugging Face model downloader CLI used to fetch SmolLM2 checkpoints**
+
+```bash
+dart pub global activate huggingface_downloader
+```
+
+**Installs the SmolLM2 CLI used for export and local inference**
+
+```bash
+dart pub global activate smollm2
+```
+
+---
+
+### Download a model (recommended options)
+
+**Small model (fast, lightweight, good for testing)**
+
+```bash
+huggingface_downloader \
+  HuggingFaceTB/SmolLM2-135M-Instruct \
+  ./models/smollm2-135m \
+  --llm-only
+```
+
+**Larger model (better quality, slower, more capable)**
+
+```bash
+huggingface_downloader \
+  HuggingFaceTB/SmolLM2-360M-Instruct \
+  ./models/smollm2-360m \
+  --llm-only
+```
+
+---
+
+### Export model to SMOL format (Q16)
+
+**Converts Hugging Face checkpoint into a high-precision single binary (Q16) for better output quality**
+
+```bash
+export_smollm2.dart -Q16 models/smollm2-135m/
+```
+
+(or)
+
+```bash
+export_smollm2.dart -Q16 models/smollm2-360m/
+```
+
+---
+
+### Start chat
+
+**Runs the interactive local chat interface with the exported model**
+
+```bash
+smollm2 \
+  -m models/smollm2-360m/smollm2-q16.bin \
+  -c
+```
+
+---
+
+**Enjoy your fully local LLM 🚀 — no servers 🌐, no APIs 🔌, just your machine running the model 💻 (in pure Dart 🎯)**
+
+---
+
 ## Supported Models
 
 This package is designed for the [**SmolLM2 family**](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct)
