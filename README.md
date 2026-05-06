@@ -85,13 +85,13 @@ huggingface_downloader \
 **Converts Hugging Face checkpoint into a high-precision single binary (Q16) for better output quality**
 
 ```bash
-export_smollm2.dart -Q16 models/smollm2-135m/
+export_smollm2 -Q16 models/smollm2-135m/
 ```
 
 (or)
 
 ```bash
-export_smollm2.dart -Q16 models/smollm2-360m/
+export_smollm2 -Q16 models/smollm2-360m/
 ```
 
 ---
@@ -133,12 +133,18 @@ Add to `pubspec.yaml`:
 ```yaml
 dependencies:
   smollm2: ^latest_version
-````
+```
 
-or install with:
+or add with:
 
 ```bash
 dart pub add smollm2
+```
+
+or activate the CLI globally:
+
+```bash
+dart pub global activate smollm2
 ```
 
 ---
@@ -151,13 +157,13 @@ format.
 ### Directory Mode
 
 ```bash
-dart run bin/export_smollm2.dart -Q8 models/smollm2-135m-instruct/
+export_smollm2 -Q8 models/smollm2-135m-instruct/
 ```
 
 or:
 
 ```bash
-dart run bin/export_smollm2.dart -Q16 models/smollm2-135m-instruct/
+export_smollm2 -Q16 models/smollm2-135m-instruct/
 ```
 
 Expected directory contents:
@@ -189,7 +195,7 @@ models/smollm2-135m-instruct/smollm2-q8.bin
 ### Explicit File Mode
 
 ```bash
-dart run bin/export_smollm2.dart \
+export_smollm2 \
   config.json \
   tokenizer.json \
   model.safetensors \
@@ -250,7 +256,7 @@ quantization modes and runtime improvements.
 ### CLI Options
 
 ```bash
-dart run bin/smollm2.dart [options]
+smollm2 [options]
 ```
 
 | Option | Description            |
@@ -270,7 +276,7 @@ dart run bin/smollm2.dart [options]
 Run SmolLM2 as a **text continuation model** using `-p`.
 
 ```bash
-dart run bin/smollm2.dart \
+smollm2 \
   -m models/smollm2-135m-instruct/smollm2-q8.bin \
   -t 0.1 \
   -r 1.01 \
@@ -326,7 +332,7 @@ Key behavior:
 Run SmolLM2 in interactive chat mode using `-c`.
 
 ```bash
-dart run bin/smollm2.dart \
+smollm2 \
   -m models/smollm2-135m-instruct/smollm2-q8.bin \
   -t 0.1 \
   -r 1.01 \
