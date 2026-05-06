@@ -220,6 +220,7 @@ Future<void> _chatSession(
       maxTokens: maxTokens,
       temperature: temperature,
       repeatPenalty: repeatPenalty,
+      seed: seed,
       random: chat.random,
       includePromptInOutput: false,
       emmitPromptTokens: false,

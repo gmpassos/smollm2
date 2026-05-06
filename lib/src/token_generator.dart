@@ -207,7 +207,7 @@ abstract class TokenGenerator {
   static const defaultRepeatPenalty = 1.09;
 
   /// Default repeat penalty applied during chat sessions.
-  static const defaultChatRepeatPenalty = 1.02;
+  static const defaultChatRepeatPenalty = 1.0;
 
   /// Generates text from the given [prompt].
   ///

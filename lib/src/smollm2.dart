@@ -727,9 +727,9 @@ class SmolLM2 implements TokenGenerator {
     final StringBuffer fullText;
     final Map<int, int> seen;
     if (_seen == null) {
+      resetCache();
       fullText = _fullText = StringBuffer();
       seen = _seen = <int, int>{};
-      resetCache();
     } else {
       fullText = _fullText!;
       seen = _seen!;
