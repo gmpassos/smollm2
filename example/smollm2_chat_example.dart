@@ -4,7 +4,7 @@ import 'package:smollm2/smollm2.dart';
 
 Future<void> main() async {
   final smollm = SmolLM2();
-  await smollm.load('models/smollm2-135m-instruct/smollm2-q8.bin');
+  await smollm.load('models/smollm2-135m-instruct/smollm2-q16.bin');
 
   final chat = ChatSession(seed: 12345);
   chat.addSystem('You are a helpful assistant.');

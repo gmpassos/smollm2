@@ -228,9 +228,9 @@ prompt tokens    : 5
 generated tokens : 40
 total tokens     : 45
 
-prompt ingest    : 1.865 s (2.68 tk/s)
-generation       : 7.802 s (5.13 tk/s)
-total            : 9.668 s (4.65 tk/s)
+prompt ingest    : 0.291 s (17.18 tk/s)
+generation       : 1.219 s (32.81 tk/s)
+total            : 1.510 s (29.80 tk/s)
 
 ```
 
@@ -239,7 +239,7 @@ Key behavior:
 * `-p` provides a **prefix to be completed**
 * Model continues the text naturally (no instruction format)
 * Output is a pure continuation of the input string
-* Stops when `maxTokens` is reached or EOS is triggered
+* Stops when `maxTokens` is reached or `EOS` is triggered
 
 ---
 
@@ -302,7 +302,6 @@ Key behavior:
 * Model generates assistant responses turn by turn
 * Full formatted context uses `<|im_start|>` / `<|im_end|>` chat template
 * Typing `exit` ends the session and prints the full serialized prompt history
-
 
 ---
 
@@ -480,9 +479,10 @@ prompt tokens    : 5
 generated tokens : 40
 total tokens     : 45
 
-prompt ingest    : 2.834 s (1.76 tk/s)
-generation       : 8.836 s (4.53 tk/s)
-total            : 11.670 s (3.86 tk/s)
+prompt ingest    : 0.405 s (12.34 tk/s)
+generation       : 1.262 s (31.69 tk/s)
+total            : 1.667 s (26.99 tk/s)
+
 ```
 
 ---
