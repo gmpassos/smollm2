@@ -1,3 +1,24 @@
+## 1.0.5
+
+- Documentation (`README.md`):
+  - Added detailed TL;DR section for quick start with local LLM chat.
+  - Added instructions for installing Dart SDK, Hugging Face model downloader CLI, and SmolLM2 CLI.
+  - Added recommended commands to download small and larger SmolLM2 models.
+  - Added instructions to export Hugging Face checkpoints to SMOL Q16 format.
+  - Added example commands to run interactive chat with exported models.
+  - Updated CLI usage examples to use global `smollm2` and `export_smollm2` commands instead of `dart run`.
+  - Clarified installation instructions for adding `smollm2` dependency and global activation.
+  - Improved formatting and consistency in CLI options and example usage.
+
+- `bin/smollm2.dart`:
+  - `_chatSession`: added `seed` parameter to `generate` call to support deterministic generation in chat mode.
+
+- `lib/src/smollm2.dart` (`SmolLM2`):
+  - In `generate` method, moved `resetCache()` call before initializing `_fullText` and `_seen` caches to ensure proper cache reset.
+
+- `lib/src/token_generator.dart`:
+  - Updated default repeat penalty for chat sessions from `1.02` to `1.0` for less penalization of repeated tokens during chat.
+
 ## 1.0.4
 
 - Added chat mode support with interactive prompt-response loop in `bin/smollm2.dart`.
