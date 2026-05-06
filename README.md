@@ -98,7 +98,7 @@ export_smollm2 -Q16 models/smollm2-360m/
 
 ### Start chat
 
-Pick the model you exported:
+**Run the interactive local chat interface using the exported model (choose the one you downloaded and exported):**
 
 **135M model**
 
