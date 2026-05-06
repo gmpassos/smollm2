@@ -186,7 +186,7 @@ Future<void> _chatSession(
     );
   }
 
-  final chat = ChatSession();
+  final chat = ChatSession(seed: seed);
 
   chat.addSystem('You are a helpful AI assistant.');
 
@@ -207,31 +207,28 @@ Future<void> _chatSession(
 
     chat.addUser(input);
 
-    final assistantResponseBuffer = StringBuffer();
-
     void onTokenEmitted(int t, String s, TokenOrigin o) {
       stdout.write(_c(s, aiTextColor, colored));
-      assistantResponseBuffer.write(s);
     }
 
     var nextPrompt = chat.buildPrompt(offset: messagesOffset);
 
     stdout.write(_c('\n AI › ', labelColor, colored));
 
-    await smollm.generate(
+    var result = await smollm.generate(
       nextPrompt,
       maxTokens: maxTokens,
       temperature: temperature,
       repeatPenalty: repeatPenalty,
-      seed: seed,
+      random: chat.random,
+      includePromptInOutput: false,
       emmitPromptTokens: false,
       onTokenEmitted: onTokenEmitted,
     );
 
-    var assistantResponse = assistantResponseBuffer.toString();
-
-    if (!assistantResponse.trim().endsWith('<|im_end|>')) {
-      await smollm.ingest('<|im_end|>\n');
+    var assistantResponse = result.output;
+    if (!chat.endsWithImEndToken(assistantResponse)) {
+      await smollm.ingest('${chat.imEnd}\n');
     }
 
     chat.addAssistant(assistantResponse);
