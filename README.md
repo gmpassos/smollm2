@@ -98,7 +98,17 @@ export_smollm2 -Q16 models/smollm2-360m/
 
 ### Start chat
 
-**Runs the interactive local chat interface with the exported model**
+Pick the model you exported:
+
+**135M model**
+
+```bash
+smollm2 \
+  -m models/smollm2-135m/smollm2-q16.bin \
+  -c
+```
+
+**360M model**
 
 ```bash
 smollm2 \
