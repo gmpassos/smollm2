@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 /// Defines the role of a message inside a chat conversation.
 ///
 /// Used to distinguish between system instructions, user inputs,
@@ -22,6 +24,68 @@ class ChatMessage {
 /// Maintains a sequence of chat messages and can convert them into
 /// a prompt format compatible with chat-based language models.
 class ChatSession {
+  static final _randomSecure = math.Random.secure();
+
+  /// Generates a random seed suitable for deterministic or reproducible runs.
+  ///
+  /// The value is produced using a secure random generator and is guaranteed
+  /// to be a positive 31-bit integer.
+  ///
+  /// Useful when the user does not explicitly provide a seed.
+  static int generateSeed() {
+    return _randomSecure.nextInt(0x7fffffff);
+  }
+
+  /// Random seed used for deterministic generation.
+  ///
+  /// When a seed is provided, the model will produce reproducible outputs
+  /// for the same input and parameters.
+  ///
+  /// If not provided, a random seed is generated automatically.
+  final int seed;
+
+  /// Random number generator used for sampling and stochastic operations.
+  ///
+  /// This is initialized during construction and used across the session
+  /// to ensure controlled randomness based on the configured seed.
+  late final math.Random random;
+
+  /// Token used to mark the beginning of a message block in the chat template.
+  ///
+  /// Typically used as part of the model's chat formatting protocol:
+  /// `<|im_start|>role\ncontent<|im_end|>`
+  static const defaultIMStart = '<|im_start|>';
+
+  /// Token used to mark the end of a message block in the chat template.
+  ///
+  /// Paired with [defaultIMStart] to delimit structured chat messages.
+  static const defaultIMEnd = '<|im_end|>';
+
+  /// Start token used to delimit chat message blocks.
+  ///
+  /// Overrides [defaultIMStart] if provided.
+  final String imStart;
+
+  /// End token used to delimit chat message blocks.
+  ///
+  /// Overrides [defaultIMEnd] if provided.
+  final String imEnd;
+
+  /// Creates a new [ChatSession].
+  ///
+  /// If [seed] is not provided, a random seed is generated automatically.
+  /// The seed controls randomness and ensures reproducible generation when fixed.
+  ///
+  /// [imStart] and [imEnd] define the chat template delimiters used to format
+  /// system, user, and assistant messages.
+  ChatSession({
+    int? seed,
+    this.imStart = ChatSession.defaultIMStart,
+    this.imEnd = ChatSession.defaultIMEnd,
+  }) : seed = seed ?? generateSeed() {
+    random = math.Random(this.seed);
+  }
+
   /// Internal list of messages in the session, in chronological order.
   final List<ChatMessage> _messages = [];
 
@@ -39,26 +103,43 @@ class ChatSession {
   void addAssistant(String text) =>
       _messages.add(ChatMessage(ChatRole.assistant, text));
 
-  /// Builds a formatted prompt string from the stored messages.
+  /// Builds a formatted prompt string from the stored chat messages.
   ///
-  /// The output follows a chat template using special tokens:
-  /// `<|im_start|>` and `<|im_end|>`, and appends a final assistant
-  /// prompt to signal where the model should continue generation.
+  /// The output follows a structured chat template using [imStart] and [imEnd]
+  /// tokens to delimit each message:
   ///
-  /// The [offset] parameter allows skipping earlier messages,
-  /// which is useful for sliding window context management.
+  /// ```text
+  /// <|im_start|>role
+  /// content<|im_end|>
+  /// ```
+  ///
+  /// After all messages, an opening assistant tag is appended to signal where
+  /// the model should continue generation.
+  ///
+  /// The [offset] parameter allows skipping older messages, which is useful
+  /// for sliding window or truncated context strategies.
   String buildPrompt({int offset = 0}) {
     final sb = StringBuffer();
 
     for (var i = offset; i < _messages.length; ++i) {
       final m = _messages[i];
-      sb.write('<|im_start|>${m.role.name}\n');
+      sb.write('$imStart${m.role.name}\n');
       sb.write(m.content);
-      sb.write('<|im_end|>\n');
+      sb.write('$imEnd\n');
     }
 
-    sb.write('<|im_start|>assistant\n');
+    sb.write('${imStart}assistant\n');
 
     return sb.toString();
+  }
+
+  /// Checks whether the given [text] ends with the configured [imEnd] token.
+  ///
+  /// This is used to determine if a generated assistant response has already been
+  /// properly terminated according to the chat template format.
+  ///
+  /// The check ignores trailing whitespace before evaluating the suffix.
+  bool endsWithImEndToken(String text) {
+    return text.trim().endsWith(imEnd);
   }
 }
