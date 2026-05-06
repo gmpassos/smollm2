@@ -28,8 +28,8 @@ No Python runtime, no llama.cpp dependency, and no external native bindings are 
 * 🔁 KV cache for autoregressive generation
 * 🌀 RoPE positional embeddings
 * 🎲 Temperature + repetition penalty + deterministic seed
-* 📦 Hugging Face safetensors exporter
-* 🖥 CLI runner included
+- 💬 Chat mode with conversation memory
+- 🖥 CLI tool included
 * 🔧 Programmatic API for Dart apps
 
 ---
@@ -76,7 +76,7 @@ format.
 dart run bin/export_smollm2.dart -Q8 models/smollm2-135m-instruct/
 ```
 
-or
+or:
 
 ```bash
 dart run bin/export_smollm2.dart -Q16 models/smollm2-135m-instruct/
@@ -115,7 +115,7 @@ dart run bin/export_smollm2.dart \
   config.json \
   tokenizer.json \
   model.safetensors \
-  smollm2-q8.bin
+smollm2-q8.bin
 ```
 
 ---
@@ -169,74 +169,231 @@ quantization modes and runtime improvements.
 
 ## CLI Inference
 
-Run a local generation:
-
-```bash
-dart run bin/smollm2.dart
-```
-
-Default parameters:
-
-```text
-model           = models/smollm2-135m-instruct/smollm2-q16.bin
-prompt          = The capital of France is
-maxTokens       = 60
-temperature     = 0.0
-repeatPenalty   = 1.09
-seed            = auto-generated
-```
-
----
-
 ### CLI Options
 
 ```bash
 dart run bin/smollm2.dart [options]
 ```
 
-| Option | Description              |
-|--------|--------------------------|
-| `-m`   | Model `.bin` file path   |
-| `-p`   | Prompt text              |
-| `-n`   | Maximum generated tokens |
-| `-t`   | Temperature              |
-| `-r`   | Repetition penalty       |
-| `-s`   | Seed                     |
-| `-h`   | Help                     |
+| Option | Description            |
+| ------ | ---------------------- |
+| -m     | model path             |
+| -p     | prompt                 |
+| -n     | max tokens             |
+| -t     | temperature            |
+| -r     | repetition penalty     |
+| -s     | seed                   |
+| -c     | chat mode              |
+| -nc    | disable colored output |
+| -h     | help                   |
 
----
+### Text Completion Mode
 
-### Example
+Run SmolLM2 as a **text continuation model** using `-p`.
 
 ```bash
 dart run bin/smollm2.dart \
-  -m models/smollm2-360m-instruct/smollm2-q8.bin \
-  -p "Explain what quantum computing is in simple terms." \
-  -n 120 \
-  -t 0.7 \
-  -r 1.12 \
-  -s 12345
+  -m models/smollm2-135m-instruct/smollm2-q8.bin \
+  -t 0.1 \
+  -r 1.01 \
+  -n 40 \
+  -p "The capital of France is"
 ```
+
+Example output:
+
+```id="pvdx9a"
+=== SmolLM2 ===
+»» Parameters: maxTokens: 40 ; temperature: 0.1 ; repetitionPenalty: 1.01 ; seed: 1377160423 ; colored: true
+ » Loading model: models/smollm2-135m-instruct/smollm2-q8.bin ...
+ » Config{quantType: QuantType.q8, groupSize: 0, hiddenSize: 576, intermediateSize: 1536, numLayers: 30, numHeads: 9, numKvHeads: 3, vocabSize: 49152, maxSeqLen: 8192, headDim: 64}
+ » Tokenizer{vocabSize: 49152, numMerges: 48900}
+ » ModelWeights{embedTokens: FP32Tensor{size: 28311552, rows: 49152 cols: 576, data: 28311552}, layers: 30, finalNorm: FP32Tensor{size: 576, rows: 1 cols: 576, data: 576}}
+ » Model loaded
+---------------------------------------------------------
+The capital of France is Paris, a vibrant city known for its iconic landmarks such as the Eiffel Tower, Louvre Museum, and Notre-Dame Cathedral. Paris is also home to several world-class museums, including¤
+---------------------------------------------------------
+=== Token Generation Stats ===
+prompt.length    : 24
+output.length    : 205
+
+seed             : 1377160423
+maxTokens        : 40
+temperature      : 0.1
+repeatPenalty    : 1.01
+
+stop reason      : TokenGenerationStopReason.maxTokensReached
+
+prompt tokens    : 5
+generated tokens : 40
+total tokens     : 45
+
+prompt ingest    : 1.865 s (2.68 tk/s)
+generation       : 7.802 s (5.13 tk/s)
+total            : 9.668 s (4.65 tk/s)
+
+```
+
+Key behavior:
+
+* `-p` provides a **prefix to be completed**
+* Model continues the text naturally (no instruction format)
+* Output is a pure continuation of the input string
+* Stops when `maxTokens` is reached or EOS is triggered
+
+---
+
+### Chat Mode
+
+Run SmolLM2 in interactive chat mode using `-c`.
+
+```bash
+dart run bin/smollm2.dart \
+  -m models/smollm2-135m-instruct/smollm2-q8.bin \
+  -t 0.1 \
+  -r 1.01 \
+  -c
+```
+
+Example session:
+
+```text
+=== SmolLM2 ===
+»» Parameters: maxTokens: 200 ; temperature: 0.1 ; repetitionPenalty: 1.01 ; seed: 1687595747 ; colored: true
+ » Loading model: models/smollm2-135m-instruct/smollm2-q8.bin ...
+ » Config{quantType: QuantType.q8, groupSize: 0, hiddenSize: 576, intermediateSize: 1536, numLayers: 30, numHeads: 9, numKvHeads: 3, vocabSize: 49152, maxSeqLen: 8192, headDim: 64}
+ » Tokenizer{vocabSize: 49152, numMerges: 48900}
+ » ModelWeights{embedTokens: FP32Tensor{size: 28311552, rows: 49152 cols: 576, data: 28311552}, layers: 30, finalNorm: FP32Tensor{size: 576, rows: 1 cols: 576, data: 576}}
+ » Model loaded
+---------------------------------------------------------
+Chat mode enabled. Type "exit" to quit.
+---------------------------------------------------------
+
+You › Hello
+
+ AI › Hello! How can I help you today?
+
+You › Who is Isaac Newton?
+
+ AI › Isaac Newton was an English mathematician, physicist, and astronomer who made major contributions to classical physics.
+
+You › exit
+---------------------------------------------------------
+Full processed text:
+---------------------------------------------------------
+
+<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+Hello<|im_end|>
+<|im_start|>assistant
+Hello! How can I help you today?<|im_end|>
+<|im_start|>user
+Who is Isaac Newton?<|im_end|>
+<|im_start|>assistant
+Isaac Newton was an English mathematician, physicist, and astronomer who made major contributions to classical physics.<|im_end|>
+
+---------------------------------------------------------
+```
+
+Key behavior:
+
+* Each user input is appended to chat history
+* Model generates assistant responses turn by turn
+* Full formatted context uses `<|im_start|>` / `<|im_end|>` chat template
+* Typing `exit` ends the session and prints the full serialized prompt history
+
 
 ---
 
 ## Programmatic Usage
 
+### Text generation
+
 ```dart
+import 'dart:io';
 import 'package:smollm2/smollm2.dart';
 
 Future<void> main() async {
   final model = SmolLM2();
 
-  await model.load('models/smollm2-135m-instruct/smollm2-q16.bin');
+  const modelPath =
+      'models/smollm2-135m-instruct/smollm2-q16.bin';
 
-  await model.generate(
-    'Write a short poem about the sea.',
+  await model.load(modelPath);
+
+  // This is a prefix to be completed
+  const prefix = 'The sea was calm and';
+
+  print('Prefix: $prefix');
+  print('\n--- completion ---\n');
+
+  final result = await model.generate(
+    prefix,
     maxTokens: 80,
     temperature: 0.8,
-    repeatPenalty: 1.10,
     seed: 42,
+    repeatPenalty: SmolLM2.defaultRepeatPenalty,
+    onTokenEmitted: (token, text, origin) {
+      stdout.write(text);
+    },
   );
+
+  print('\n\n--- stats ---');
+  print(result.statsSummary());
+}
+```
+
+---
+
+### Chat API
+
+```dart
+import 'dart:io';
+import 'package:smollm2/smollm2.dart';
+
+Future<void> main() async {
+  final smollm = SmolLM2();
+  await smollm.load('models/smollm2-135m-instruct/smollm2-q16.bin');
+
+  final chat = ChatSession();
+  chat.addSystem('You are a helpful assistant.');
+
+  var messagesOffset = 0;
+
+  void onTokenEmitted(int t, String s, TokenOrigin o) {
+    stdout.write(s);
+  }
+
+  print('Chat ready. Type "exit" to quit.');
+
+  while (true) {
+    stdout.write('\nYou › ');
+    final input = stdin.readLineSync();
+    if (input == null) continue;
+
+    if (input.trim().toLowerCase() == 'exit') break;
+
+    chat.addUser(input);
+
+    final prompt = chat.buildPrompt(offset: messagesOffset);
+
+    stdout.write('AI › ');
+
+    var result = await smollm.generate(
+      prompt,
+      includePromptInOutput: false,
+      emmitPromptTokens: false,
+      onTokenEmitted: onTokenEmitted,
+    );
+
+    final assistantText = result.output;
+    chat.addAssistant(assistantText);
+
+    messagesOffset = chat.length;
+
+    stdout.write('\n');
+  }
 }
 ```
 
@@ -286,31 +443,46 @@ are used together.
 Random seed can also be generated automatically:
 
 ```dart
-
 final seed = SmolLM2.generateSeed();
 ```
 
 ---
 
-## Runtime Statistics
+## TokenGenerationResult stats
 
-After generation the engine reports:
-
-* prompt token count
-* generated token count
-* total tokens
-* prompt ingestion speed
-* generation speed
-
-Example:
+Example of `TokenGenerationResult.statsSummary()`:
 
 ```text
---- stats ---
-prompt tokens    : 6
-generated tokens : 60
-total tokens     : 66
-prompt ingest    : 0.842 s (7.12 tk/s)
-generation       : 5.101 s (11.76 tk/s)
+=== SmolLM2 ===
+»» Parameters: maxTokens: 40 ; temperature: 0.1 ; repetitionPenalty: 1.01 ; seed: 101836062 ; colored: true
+ » Loading model: models/smollm2-135m-instruct/smollm2-q8.bin ...
+ » Config{quantType: QuantType.q8, groupSize: 0, hiddenSize: 576, intermediateSize: 1536, numLayers: 30, numHeads: 9, numKvHeads: 3, vocabSize: 49152, maxSeqLen: 8192, headDim: 64}
+ » Tokenizer{vocabSize: 49152, numMerges: 48900}
+ » ModelWeights{embedTokens: FP32Tensor{size: 28311552, rows: 49152 cols: 576, data: 28311552}, layers: 30, finalNorm: FP32Tensor{size: 576, rows: 1 cols: 576, data: 576}}
+ » Model loaded
+---------------------------------------------------------
+The capital of France is Paris, a city known for its historical landmarks, culture, and cultural institutions. Paris is a major center of commerce, finance, and education in the world.                                                                                                                                                                                      
+                                                                                                                                                                                       
+Paris is also a major center¤                                                                                                                                                          
+---------------------------------------------------------
+=== Token Generation Stats ===
+prompt.length    : 24
+output.length    : 214
+
+seed             : 101836062
+maxTokens        : 40
+temperature      : 0.1
+repeatPenalty    : 1.01
+
+stop reason      : TokenGenerationStopReason.maxTokensReached
+
+prompt tokens    : 5
+generated tokens : 40
+total tokens     : 45
+
+prompt ingest    : 2.834 s (1.76 tk/s)
+generation       : 8.836 s (4.53 tk/s)
+total            : 11.670 s (3.86 tk/s)
 ```
 
 ---
@@ -413,9 +585,9 @@ Optimizations include:
 
 This project focuses on:
 
+* pure Dart runtime
 * portability
 * simplicity
-* pure Dart experimentation
 * educational transformer implementation
 * local offline inference
 

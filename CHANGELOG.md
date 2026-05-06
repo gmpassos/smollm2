@@ -8,6 +8,12 @@
   - Added `_promptComplete` function for single prompt completion with optional colored output.
 - `lib/src/chat.dart`:
   - Added `ChatSession` and `ChatMessage` classes to manage chat history and build formatted prompts.
+  - `ChatSession` enhancements:
+    - Added optional `seed` parameter and internal `random` generator for deterministic sampling.
+    - Added static `generateSeed()` method for secure random seed generation.
+    - Added configurable chat template tokens `imStart` and `imEnd` with defaults `<|im_start|>` and `<|im_end|>`.
+    - Updated `buildPrompt` to use configurable tokens and append assistant prompt.
+    - Added `endsWithImEndToken` method to check if a response ends with the termination token.
 - `lib/src/smollm2.dart`:
   - Added optional `logger` callback to `SmolLM2` for logging model loading and status messages.
   - Added detailed logging during model loading steps.
@@ -28,6 +34,8 @@
   - Exported new `chat.dart` module for chat session support.
 - `example/smollm2_example.dart`:
   - Added logger callback to example `SmolLM2` instance for verbose output.
+- Example:
+  - Added `example/smollm2_chat_example.dart` demonstrating interactive chat session usage with token streaming, seed control, and proper prompt management.
 
 ## 1.0.3
 
