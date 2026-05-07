@@ -530,6 +530,15 @@ class Q16Quantizer {
     final scale = maxAbs == 0 ? 1.0 : maxAbs / 32767.0;
     final out = Int16List(length);
 
+    for (int i = offset; i < end; i++) {
+      final q = (block[i] / scale).round();
+      out[outOffset++] = q.clamp(-32767, 32767);
+    }
+
+    return scale;
+  }
+
+
     for (int i = 0; i < length; i++) {
       final q = (src[i] / scale).round();
       out[i] = q.clamp(-32767, 32767);
@@ -616,8 +625,6 @@ class TensorBinaryWriter {
       bd.setInt16(i * 2, q.data[i], Endian.little);
     }
 
-        dataWriter.writeBytes(bd.buffer.asUint8List());
-        break;
     dataWriter.writeBytes(bd.buffer.asUint8List());
   }
   void writeTensorQ16PerBlock(Float32List tensor) {
@@ -642,7 +649,6 @@ class TensorBinaryWriter {
         break;
     }
 
-    await dataWriter.flush();
   void writeTensorBF16(Float32List tensor) {
     final out = ByteData(tensor.length * 2);
     final buffer = ByteData(4);
