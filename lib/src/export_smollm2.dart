@@ -139,7 +139,9 @@ abstract class Quantized {
 
   (int, int)? _dataHash;
 
-  (int, int) get dataHash => _dataHash ??= data.hashListInt2();
+  (int, int) get dataHash => _dataHash ??= computeDataHash();
+
+  (int, int) computeDataHash() => data.hashListInt2();
 }
 
 class Q8Quantized extends Quantized {
@@ -158,7 +160,7 @@ class Q8Quantized extends Quantized {
           ListEquality().equals(data, other.data);
 
   @override
-  int get hashCode => Object.hash(scale, ListEquality().hash(data));
+  int get hashCode => Object.hash(scale, data.hashListInt());
 
   @override
   String toString() => 'Q8Quantized{scale: $scale, data: ${data.length}}';
@@ -180,7 +182,7 @@ class Q16Quantized extends Quantized {
           data == other.data;
 
   @override
-  int get hashCode => Object.hash(scale, ListEquality().hash(data));
+  int get hashCode => Object.hash(scale, data.hashListInt());
 
   @override
   String toString() => 'Q16Quantized{scale: $scale, data: ${data.length}}';
@@ -191,7 +193,7 @@ class Q16Quantized extends Quantized {
 abstract class TensorDTypeDecoder {
   Float32List decodeTensor(Uint8List bytes);
 
-  double decodeScalar(Uint8List raw, int byteOffset);
+  double decodeScalar(Uint8List raw, int bytesOffset, int index);
 }
 
 /* F32 */
@@ -199,17 +201,18 @@ class F32Decoder implements TensorDTypeDecoder {
   @override
   Float32List decodeTensor(Uint8List bytes) {
     final bd = ByteData.sublistView(bytes);
-    final out = Float32List(bytes.length >> 2);
+    final out = Float32List(bytes.length ~/ 4);
 
     for (int i = 0; i < out.length; i++) {
-      out[i] = bd.getFloat32(i << 2, Endian.little);
+      out[i] = bd.getFloat32(i * 4, Endian.little);
     }
     return out;
   }
 
   @override
-  double decodeScalar(Uint8List raw, int byteOffset) {
-    return ByteData.sublistView(raw).getFloat32(byteOffset, Endian.little);
+  double decodeScalar(Uint8List raw, int bytesOffset, int index) {
+    final valueOffset = bytesOffset + (index * 4);
+    return ByteData.sublistView(raw).getFloat32(valueOffset, Endian.little);
   }
 }
 
@@ -218,17 +221,18 @@ class F16Decoder implements TensorDTypeDecoder {
   @override
   Float32List decodeTensor(Uint8List bytes) {
     final bd = ByteData.sublistView(bytes);
-    final out = Float32List(bytes.length >> 1);
+    final out = Float32List(bytes.length ~/ 2);
 
     for (int i = 0; i < out.length; i++) {
-      out[i] = _decodeHalf(bd.getUint16(i << 1, Endian.little));
+      out[i] = _decodeHalf(bd.getUint16(i * 2, Endian.little));
     }
     return out;
   }
 
   @override
-  double decodeScalar(Uint8List raw, int byteOffset) {
-    final h = ByteData.sublistView(raw).getUint16(byteOffset, Endian.little);
+  double decodeScalar(Uint8List raw, int bytesOffset, int index) {
+    final valueOffset = bytesOffset + (index * 2);
+    final h = ByteData.sublistView(raw).getUint16(valueOffset, Endian.little);
     return _decodeHalf(h);
   }
 
@@ -242,7 +246,8 @@ class F16Decoder implements TensorDTypeDecoder {
     if (e == 0) {
       v = math.pow(2, -14) * (f / 1024.0);
     } else if (e == 31) {
-      v = double.infinity;
+      if (f == 0) return double.infinity;
+      return double.nan;
     } else {
       v = math.pow(2, e - 15) * (1.0 + f / 1024.0);
     }
@@ -256,30 +261,35 @@ class BF16Decoder implements TensorDTypeDecoder {
   @override
   Float32List decodeTensor(Uint8List bytes) {
     final bd = ByteData.sublistView(bytes);
-    final out = Float32List(bytes.length >> 1);
+    final out = Float32List(bytes.length ~/ 2);
 
-    final dataBuffer = ByteData(4);
+    final buffer = ByteData(4);
+
     for (int i = 0; i < out.length; i++) {
-      dataBuffer.setUint16(
-        2,
-        bd.getUint16(i << 1, Endian.little),
-        Endian.little,
-      );
-      out[i] = dataBuffer.getFloat32(0, Endian.little);
+      var valueOffset = i * 2;
+
+      // copy raw BF16 bytes directly into high half of FP32
+      buffer.setUint8(2, bd.getUint8(valueOffset));
+      buffer.setUint8(3, bd.getUint8(valueOffset + 1));
+
+      out[i] = buffer.getFloat32(0, Endian.little);
     }
 
     return out;
   }
 
   @override
-  double decodeScalar(Uint8List raw, int byteOffset) {
-    final dataBuffer = ByteData(4);
-    dataBuffer.setUint16(
-      2,
-      ByteData.sublistView(raw).getUint16(byteOffset, Endian.little),
-      Endian.little,
-    );
-    return dataBuffer.getFloat32(0, Endian.little);
+  double decodeScalar(Uint8List raw, int bytesOffset, int index) {
+    var bd = ByteData.sublistView(raw);
+    final buffer = ByteData(4);
+
+    final valueOffset = bytesOffset + (index * 2);
+
+    // copy raw BF16 bytes directly into high half of FP32
+    buffer.setUint8(2, bd.getUint8(valueOffset));
+    buffer.setUint8(3, bd.getUint8(valueOffset + 1));
+
+    return buffer.getFloat32(0, Endian.little);
   }
 }
 
@@ -290,7 +300,7 @@ class Q16Decoder implements TensorDTypeDecoder {
     final bd = ByteData.sublistView(bytes);
 
     final scale = bd.getFloat32(0, Endian.little);
-    final outLen = (bytes.length - 4) >> 1;
+    final outLen = (bytes.length - 4) ~/ 2;
     final out = Float32List(outLen);
 
     int offset = 4;
@@ -305,10 +315,14 @@ class Q16Decoder implements TensorDTypeDecoder {
   }
 
   @override
-  double decodeScalar(Uint8List raw, int byteOffset) {
+  double decodeScalar(Uint8List raw, int bytesOffset, int index) {
     final bd = ByteData.sublistView(raw);
-    final scale = bd.getFloat32(0, Endian.little);
-    final v = bd.getInt16(byteOffset, Endian.little);
+
+    final scale = bd.getFloat32(bytesOffset, Endian.little);
+
+    final valueOffset = bytesOffset + 4 + (index * 2);
+    final v = bd.getInt16(valueOffset, Endian.little);
+
     return v * scale;
   }
 }
@@ -392,8 +406,7 @@ class SafeTensorFileRepository implements TensorRepository {
   double readScalar(String tensorName, int index) {
     final meta = info(tensorName);
     final decoder = TensorDecoderFactory.create(meta.dtype);
-    final byteSize = meta.dtype == 'F32' ? 4 : 2;
-    return decoder.decodeScalar(raw, meta.begin + index * byteSize);
+    return decoder.decodeScalar(raw, meta.begin, index);
   }
 }
 
@@ -454,21 +467,37 @@ class SafeTensorShardRepository implements TensorRepository {
 
 class Q8Quantizer {
   Q8Quantized quantize(Float32List src) {
-    double maxAbs = 0.0;
+    final length = src.length;
+    var data = Int8List(length);
+    final scale = _quantizeRange(src, 0, length, data, 0);
+    return Q8Quantized(scale, data);
+  }
 
-    var length = src.length;
-    for (int i = 0; i < length; i++) {
-      final v = src[i].abs();
-      if (v > maxAbs) maxAbs = v;
+  double _quantizeRange(
+    Float32List block,
+    int offset,
+    int end,
+    Int8List out,
+    int outOffset,
+  ) {
+    assert(end - offset > 0);
+
+    double maxAbs = 0.0;
+    for (int i = offset; i < end; i++) {
+      final v = block[i];
+      final a = v.abs();
+      if (a > maxAbs) maxAbs = a;
     }
 
     final scale = maxAbs == 0 ? 1.0 : maxAbs / 127.0;
-    final out = Int8List(length);
 
-    for (int i = 0; i < length; i++) {
-      final q = (src[i] / scale).round();
-      out[i] = q.clamp(-127, 127);
+    for (int i = offset; i < end; i++) {
+      final q = (block[i] / scale).round();
+      out[outOffset++] = q.clamp(-127, 127);
     }
+
+    return scale;
+  }
 
     return Q8Quantized(scale, out);
   }
@@ -476,12 +505,26 @@ class Q8Quantizer {
 
 class Q16Quantizer {
   Q16Quantized quantize(Float32List src) {
-    double maxAbs = 0.0;
+    final length = src.length;
+    var data = Int16List(length);
+    final scale = _quantizeRange(src, 0, length, data, 0);
+    return Q16Quantized(scale, data);
+  }
 
-    var length = src.length;
-    for (int i = 0; i < length; i++) {
-      final v = src[i].abs();
-      if (v > maxAbs) maxAbs = v;
+  double _quantizeRange(
+    Float32List block,
+    int offset,
+    int end,
+    Int16List out,
+    int outOffset,
+  ) {
+    assert(end - offset > 0);
+
+    double maxAbs = 0.0;
+    for (int i = offset; i < end; i++) {
+      final v = block[i];
+      final a = v.abs();
+      if (a > maxAbs) maxAbs = a;
     }
 
     final scale = maxAbs == 0 ? 1.0 : maxAbs / 32767.0;
@@ -516,6 +559,34 @@ class TensorBinaryWriter {
         dataWriter.writeU32(dataHash.$2);
         dataWriter.writeBytes(q.data.buffer.asUint8List());
         break;
+        writeTensorQ8(tensor);
+        break;
+
+      case QuantType.q16:
+        writeTensorQ16(tensor);
+        break;
+
+      case QuantType.bf16:
+        writeTensorBF16H(tensor);
+        break;
+
+      case QuantType.fp32:
+        writeTensorFP32(tensor);
+        break;
+    }
+
+    await dataWriter.flush();
+  }
+
+  void writeTensorQ8(Float32List tensor) {
+    final q = q8.quantize(tensor);
+    final dataHash = q.dataHash;
+    dataWriter.writeF32(q.scale);
+    dataWriter.writeU32(dataHash.$1);
+    dataWriter.writeU32(dataHash.$2);
+    dataWriter.writeBytes(q.data.buffer.asUint8List());
+  }
+
 
       case QuantType.q16:
         final q = q16.quantize(tensor);
@@ -528,8 +599,39 @@ class TensorBinaryWriter {
           bd.setInt16(i * 2, q.data[i], Endian.little);
         }
 
+  void writeTensorQ16(Float32List tensor) {
+    final q = q16.quantize(tensor);
+    final dataHash = q.dataHash;
+
+    // scale:
+    dataWriter.writeF32(q.scale);
+
+    // hash:
+    dataWriter.writeU32(dataHash.$1);
+    dataWriter.writeU32(dataHash.$2);
+
+    // data
+    final bd = ByteData(q.data.length * 2);
+    for (int i = 0; i < q.data.length; i++) {
+      bd.setInt16(i * 2, q.data[i], Endian.little);
+    }
+
         dataWriter.writeBytes(bd.buffer.asUint8List());
         break;
+    dataWriter.writeBytes(bd.buffer.asUint8List());
+  }
+  void writeTensorQ16PerBlock(Float32List tensor) {
+    final q = q16.quantizePerBlock(tensor);
+
+    dataWriter.writeU16(q.blockSize);
+
+    final blocks = q.blocks;
+    for (var b = 0; b < blocks.length; ++b) {
+      final block = blocks[b];
+
+      final data = block.data;
+      final len = data.length;
+      final hash = block.dataHash;
 
       case QuantType.fp32:
         final bd = ByteData(tensor.length * 4);
@@ -541,6 +643,49 @@ class TensorBinaryWriter {
     }
 
     await dataWriter.flush();
+  void writeTensorBF16(Float32List tensor) {
+    final out = ByteData(tensor.length * 2);
+    final buffer = ByteData(4);
+
+    for (int i = 0; i < tensor.length; i++) {
+      buffer.setFloat32(0, tensor[i], Endian.little);
+
+      final o = i * 2;
+      out.setUint8(o, buffer.getUint8(2));
+      out.setUint8(o + 1, buffer.getUint8(3));
+    }
+
+    dataWriter.writeBytes(out.buffer.asUint8List());
+  }
+
+  void writeTensorBF16H(Float32List tensor) {
+    final size = tensor.length;
+
+    final out = ByteData(size * 2);
+    final buffer = ByteData(4);
+
+    final hash = Hash64();
+
+    for (int i = 0; i < size; i++) {
+      buffer.setFloat32(0, tensor[i], Endian.little);
+      final v = buffer.getUint16(2, Endian.little);
+      out.setUint16(i * 2, v, Endian.little);
+      hash.add16(v);
+    }
+
+    final (h1, h2) = hash.finish();
+
+    dataWriter.writeBytes(out.buffer.asUint8List());
+    dataWriter.writeU32(h1);
+    dataWriter.writeU32(h2);
+  }
+
+  void writeTensorFP32(Float32List tensor) {
+    final bd = ByteData(tensor.length * 4);
+    for (int i = 0; i < tensor.length; i++) {
+      bd.setFloat32(i * 4, tensor[i], Endian.little);
+    }
+    dataWriter.writeBytes(bd.buffer.asUint8List());
   }
 
   Future<void> writeTensorFromRepo(
@@ -548,13 +693,7 @@ class TensorBinaryWriter {
     String tensorName,
     QuantType type,
   ) async {
-    final info = await repo.info(tensorName);
-    final values = Float32List(info.count);
-
-    for (int i = 0; i < info.count; i++) {
-      values[i] = await repo.readScalar(tensorName, i);
-    }
-
+    final values = await repo.readTensor(tensorName);
     await writeTensor(values, type);
   }
 }
@@ -683,11 +822,15 @@ class SmolLM2Exporter {
   }
 
   Future<void> _writeEmbeddings(QuantType type) async {
+    await writer.dataWriter.flush();
+
     print('Writing embeddings...');
     await writer.writeTensorFromRepo(repo, 'model.embed_tokens.weight', type);
   }
 
   Future<void> _writeLayers(QuantType type) async {
+    await writer.dataWriter.flush();
+
     for (int l = 0; l < config.numHiddenLayers; l++) {
       print('Layer $l/${config.numHiddenLayers - 1} (${type.name})');
       await _writeLayer(l, type);
@@ -703,26 +846,10 @@ class SmolLM2Exporter {
       QuantType.fp32,
     );
 
-    await w.writeTensorFromRepo(
-      repo,
-      HFNames.layer(l, 'self_attn.q_proj.weight'),
-      type,
-    );
-    await w.writeTensorFromRepo(
-      repo,
-      HFNames.layer(l, 'self_attn.k_proj.weight'),
-      type,
-    );
-    await w.writeTensorFromRepo(
-      repo,
-      HFNames.layer(l, 'self_attn.v_proj.weight'),
-      type,
-    );
-    await w.writeTensorFromRepo(
-      repo,
-      HFNames.layer(l, 'self_attn.o_proj.weight'),
-      type,
-    );
+    await w.writeTensorFromRepo(repo, HFNames.qProj(l), type);
+    await w.writeTensorFromRepo(repo, HFNames.kProj(l), type);
+    await w.writeTensorFromRepo(repo, HFNames.vProj(l), type);
+    await w.writeTensorFromRepo(repo, HFNames.oProj(l), type);
 
     await w.writeTensorFromRepo(
       repo,
@@ -730,21 +857,9 @@ class SmolLM2Exporter {
       QuantType.fp32,
     );
 
-    await w.writeTensorFromRepo(
-      repo,
-      HFNames.layer(l, 'mlp.gate_proj.weight'),
-      type,
-    );
-    await w.writeTensorFromRepo(
-      repo,
-      HFNames.layer(l, 'mlp.up_proj.weight'),
-      type,
-    );
-    await w.writeTensorFromRepo(
-      repo,
-      HFNames.layer(l, 'mlp.down_proj.weight'),
-      type,
-    );
+    await w.writeTensorFromRepo(repo, HFNames.mlpGate(l), type);
+    await w.writeTensorFromRepo(repo, HFNames.mlpUp(l), type);
+    await w.writeTensorFromRepo(repo, HFNames.mlpDown(l), type);
   }
 
   Future<void> _writeFinalNorm() async {
