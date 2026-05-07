@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'data.dart';
@@ -21,7 +22,138 @@ abstract class Tensor {
   FP32Tensor toFP32Tensor({bool cached = false});
 }
 
-class Q8Tensor extends Tensor {
+abstract class QTensor extends Tensor {
+  QTensor(super.rows, super.cols);
+
+  static const double defaultDequantizationJitterScale = 0.008;
+
+  @pragma('vm:prefer-inline')
+  double dequantize(int qValue, double scale) {
+    // return dequantizeAdaptive(qValue, scale);
+    return dequantizeStandard(qValue, scale);
+  }
+
+  @pragma('vm:prefer-inline')
+  double dequantizeStandard(int qValue, double scale) {
+    var v = qValue * scale;
+    return v;
+  }
+
+  @pragma('vm:prefer-inline')
+  double dequantizeCompensated(int qValue, double scale) {
+    if (qValue == 0) return 0.0;
+    var v = (qValue + (qValue > 0 ? (0.5 / 4) : (-0.5 / 4))) * scale;
+    return v;
+  }
+
+  @pragma('vm:prefer-inline')
+  double dequantizeJittered(
+    int qValue,
+    double scale,
+    math.Random jitterRandom, {
+
+    double jitterScale = QTensor.defaultDequantizationJitterScale,
+  }) {
+    return dequantizeAdaptiveJittered(
+      qValue,
+      scale,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+    );
+  }
+
+  @pragma('vm:prefer-inline')
+  double dequantizeCompensatedStochastic(
+    int qValue,
+    double scale,
+    math.Random jitterRandom, {
+    double jitterScale = QTensor.defaultDequantizationJitterScale,
+  }) {
+    var v = dequantizeCompensated(qValue, scale);
+
+    // deterministic micro stochastic reconstruction
+    var j = 1.0 + ((jitterRandom.nextDouble() * 2.0 - 1.0) * jitterScale);
+    var v2 = v * j;
+
+    // print('!!! QJ: $v');
+
+    return v2;
+  }
+
+  @pragma('vm:prefer-inline')
+  double dequantizeAdaptive(
+    int qValue,
+    double scale, {
+    int maxQ = 32767,
+    double baseOffset = 0.125,
+    double edgeBoost = 0.35,
+    double nonLinear = 0.5,
+  }) {
+    if (qValue == 0) return 0.0;
+
+    final sign = qValue > 0 ? 1.0 : -1.0;
+    final absQ = qValue.abs().toDouble();
+
+    // normalized magnitude
+    final t = absQ / maxQ;
+
+    // stronger compensation near saturation
+    final adaptiveOffset = baseOffset + math.pow(t, nonLinear) * edgeBoost;
+
+    // centroid-style reconstruction
+    var reconstructed = (qValue + sign * adaptiveOffset) * scale;
+
+    return reconstructed;
+  }
+
+  @pragma('vm:prefer-inline')
+  double dequantizeAdaptiveJittered(
+    int qValue,
+    double scale, {
+    int maxQ = 32767,
+    double baseOffset = 0.125,
+    double edgeBoost = 0.35,
+    double nonLinear = 0.5,
+    math.Random? jitterRandom,
+    double jitterScale = 0.01,
+  }) {
+    if (qValue == 0) return 0.0;
+
+    final sign = qValue > 0 ? 1.0 : -1.0;
+    final absQ = qValue.abs().toDouble();
+
+    // normalized magnitude
+    final t = absQ / maxQ;
+
+    // stronger compensation near saturation
+    final adaptiveOffset = baseOffset + math.pow(t, nonLinear) * edgeBoost;
+
+    // centroid-style reconstruction
+    var reconstructed = (qValue + sign * adaptiveOffset) * scale;
+
+    // optional micro stochastic correction
+    if (jitterRandom != null) {
+      final jitter =
+          (jitterRandom.nextDouble() * 2.0 - 1.0) * jitterScale * scale;
+
+      reconstructed += jitter;
+    }
+
+    return reconstructed;
+  }
+
+  @override
+  FP32Tensor toFP32Tensor({
+    bool cached = false,
+    math.Random? jitterRandom,
+    double jitterScale = defaultDequantizationJitterScale,
+  });
+}
+
+class Q8Tensor extends QTensor {
+  static const double averageFP32ToQ8Error = 0.03125;
+  static const double defaultQ8DequantizationJitterScale = averageFP32ToQ8Error;
+
   final double scale;
 
   late final Int8List data;
@@ -70,20 +202,35 @@ class Q8Tensor extends Tensor {
   FP32Tensor? _fp32Tensor;
 
   @override
-  FP32Tensor toFP32Tensor({bool cached = false}) {
+  FP32Tensor toFP32Tensor({
+    bool cached = false,
+    math.Random? jitterRandom,
+    double jitterScale = defaultQ8DequantizationJitterScale,
+  }) {
     if (cached) {
-      return _fp32Tensor ??= _toFP32TensorImpl();
+      return _fp32Tensor ??= _toFP32TensorImpl(jitterRandom, jitterScale);
     }
-    return _toFP32TensorImpl();
+    return _toFP32TensorImpl(jitterRandom, jitterScale);
   }
 
-  FP32Tensor _toFP32TensorImpl() {
+  FP32Tensor _toFP32TensorImpl(math.Random? jitterRandom, double jitterScale) {
     final scale = this.scale;
     final len = data.length;
     final dataFP32 = Float32List(len);
 
-    for (int i = 0; i < len; i++) {
-      dataFP32[i] = data[i] * scale;
+    if (jitterRandom != null) {
+      for (int i = 0; i < len; i++) {
+        dataFP32[i] = dequantizeJittered(
+          data[i],
+          scale,
+          jitterRandom,
+          jitterScale: jitterScale,
+        );
+      }
+    } else {
+      for (int i = 0; i < len; i++) {
+        dataFP32[i] = dequantize(data[i], scale);
+      }
     }
 
     return FP32Tensor(rows, cols, dataFP32);
@@ -182,7 +329,11 @@ class Q8Tensor extends Tensor {
   }
 }
 
-class Q16Tensor extends Tensor {
+class Q16Tensor extends QTensor {
+  static const double averageFP32ToQ16Error = 0.0009765625;
+  static const double defaultQ16DequantizationJitterScale =
+      averageFP32ToQ16Error;
+
   final double scale;
 
   late final Int16List data;
@@ -236,20 +387,35 @@ class Q16Tensor extends Tensor {
   FP32Tensor? _fp32Tensor;
 
   @override
-  FP32Tensor toFP32Tensor({bool cached = false}) {
+  FP32Tensor toFP32Tensor({
+    bool cached = false,
+    math.Random? jitterRandom,
+    double jitterScale = defaultQ16DequantizationJitterScale,
+  }) {
     if (cached) {
-      return _fp32Tensor ??= _toFP32TensorImpl();
+      return _fp32Tensor ??= _toFP32TensorImpl(jitterRandom, jitterScale);
     }
-    return _toFP32TensorImpl();
+    return _toFP32TensorImpl(jitterRandom, jitterScale);
   }
 
-  FP32Tensor _toFP32TensorImpl() {
+  FP32Tensor _toFP32TensorImpl(math.Random? jitterRandom, double jitterScale) {
     final scale = this.scale;
     final len = data.length;
     final dataFP32 = Float32List(len);
 
-    for (int i = 0; i < len; i++) {
-      dataFP32[i] = data[i] * scale;
+    if (jitterRandom != null) {
+      for (int i = 0; i < len; i++) {
+        dataFP32[i] = dequantizeJittered(
+          data[i],
+          scale,
+          jitterRandom,
+          jitterScale: jitterScale,
+        );
+      }
+    } else {
+      for (int i = 0; i < len; i++) {
+        dataFP32[i] = dequantize(data[i], scale);
+      }
     }
 
     return FP32Tensor(rows, cols, dataFP32);
