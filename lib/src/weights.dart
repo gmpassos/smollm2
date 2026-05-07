@@ -183,7 +183,6 @@ class ModelWeights {
           fp32: fp32,
         );
       case QuantType.q16:
-        return _readQ16(br, rows, cols, fp32: fp32);
         return _readQ16(
           br,
           rows,
