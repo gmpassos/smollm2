@@ -516,6 +516,183 @@ class Q16Tensor extends QTensor {
   }
 }
 
+class BF16Tensor extends Tensor {
+  final Uint16List data;
+
+  BF16Tensor(super.rows, super.cols, this.data);
+
+  @override
+  QuantType? get quantType => QuantType.bf16;
+
+  factory BF16Tensor.vector(Uint16List data) {
+    return BF16Tensor(1, data.length, data);
+  }
+
+  factory BF16Tensor.readFrom(DataReader dataReader, int rows, int cols) {
+    var size = rows * cols;
+
+    final raw = dataReader.readBytes(size * 2);
+
+    final bd = ByteData.sublistView(raw);
+    final data = Uint16List(size);
+
+    for (var i = 0; i < size; i++) {
+      data[i] = bd.getUint16(i * 2, Endian.little);
+    }
+
+    return BF16Tensor(rows, cols, data);
+  }
+
+  factory BF16Tensor.readFromH(DataReader dataReader, int rows, int cols) {
+    final size = rows * cols;
+
+    final raw = dataReader.readBytes(size * 2);
+
+    final bd = ByteData.sublistView(raw);
+    final data = Uint16List(size);
+
+    final hash = Hash64();
+
+    for (var i = 0; i < size; i++) {
+      final v = bd.getUint16(i * 2, Endian.little);
+      data[i] = v;
+      hash.add16(v);
+    }
+
+    final expectedH1 = dataReader.readU32();
+    final expectedH2 = dataReader.readU32();
+    final (h1, h2) = hash.finish();
+
+    if (h1 != expectedH1 || h2 != expectedH2) {
+      throw StateError("BF16Tensor hash mismatch");
+    }
+
+    return BF16Tensor(rows, cols, data);
+  }
+
+  FP32Tensor? _fp32Cache;
+
+  @override
+  FP32Tensor toFP32Tensor({bool cached = false}) {
+    if (cached) {
+      return _fp32Cache ??= _toFP32();
+    }
+    return _toFP32();
+  }
+
+  FP32Tensor _toFP32() {
+    final out = Float32List(rows * cols);
+    final bd = ByteData(4);
+
+    bd.setUint32(0, 0, Endian.little);
+
+    for (int i = 0; i < data.length; i++) {
+      bd.setUint16(2, data[i], Endian.little);
+      out[i] = bd.getFloat32(0, Endian.little);
+    }
+
+    return FP32Tensor(rows, cols, out);
+  }
+
+  // ---- BF16 fast decode ----
+  static double _bf16ToF32(int v, ByteData bd) {
+    bd.setUint32(0, v << 16, Endian.little);
+    return bd.getFloat32(0, Endian.little);
+  }
+
+  @override
+  void dotTo(Float32List out, Float32ListX4 x) {
+    if (colsX4Compatible) {
+      _dotToX4(out, x);
+    } else {
+      _dotToAny(out, x);
+    }
+  }
+
+  void _dotToX4(Float32List out, Float32ListX4 x) {
+    final zero = Float32x4.zero();
+
+    final rows = this.rows;
+    final cols = this.cols;
+    final simdCols = cols >> 2;
+
+    final xListX4 = x.listX4;
+
+    final data = this.data;
+
+    final bd = ByteData(4);
+
+    for (int i = 0; i < rows; i++) {
+      final rowBase = i * cols;
+
+      Float32x4 vsum = zero;
+
+      for (int k = 0; k < simdCols; k++) {
+        final base = rowBase + (k * 4);
+
+        final a = Float32x4(
+          _bf16ToF32(data[base], bd),
+          _bf16ToF32(data[base + 1], bd),
+          _bf16ToF32(data[base + 2], bd),
+          _bf16ToF32(data[base + 3], bd),
+        );
+
+        vsum += a * xListX4[k];
+      }
+
+      double sum = vsum.x + vsum.y + vsum.z + vsum.w;
+
+      for (int j = simdCols << 2; j < cols; j++) {
+        sum += _bf16ToF32(data[rowBase + j], bd) * x.list[j];
+      }
+
+      out[i] = sum;
+    }
+  }
+
+  void _dotToAny(Float32List out, Float32ListX4 x) {
+    final zero = Float32x4.zero();
+
+    final rows = this.rows;
+    final cols = this.cols;
+    final simdCols = cols >> 2;
+
+    final xList = x.list;
+    final xListX4 = x.listX4;
+
+    final data = this.data;
+
+    final bd = ByteData(4);
+
+    for (int i = 0; i < rows; i++) {
+      final rowBase = i * cols;
+
+      Float32x4 vsum = zero;
+
+      for (int k = 0; k < simdCols; k++) {
+        final base = rowBase + (k * 4);
+
+        final a = Float32x4(
+          _bf16ToF32(data[base], bd),
+          _bf16ToF32(data[base + 1], bd),
+          _bf16ToF32(data[base + 2], bd),
+          _bf16ToF32(data[base + 3], bd),
+        );
+
+        vsum += a * xListX4[k];
+      }
+
+      double sum = vsum.x + vsum.y + vsum.z + vsum.w;
+
+      for (int j = simdCols << 2; j < cols; j++) {
+        sum += _bf16ToF32(data[rowBase + j], bd) * xList[j];
+      }
+
+      out[i] = sum;
+    }
+  }
+}
+
 class FP32Tensor extends Tensor {
   final Float32ListX4 data;
 
