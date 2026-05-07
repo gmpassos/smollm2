@@ -10,6 +10,11 @@ Future<void> main(List<String> args) async {
   double? repeatPenalty;
 
   int? seed;
+
+  bool jitterEnabled = false;
+  int? jitterSeed;
+  double? jitterScale;
+
   bool chatMode = false;
   bool colored = true;
   String? singlePrompt;
@@ -34,6 +39,19 @@ Future<void> main(List<String> args) async {
       case '-s':
         seed = int.parse(args[++i]);
         break;
+
+      case '-j':
+        jitterEnabled = true;
+        break;
+      case '-js':
+        jitterEnabled = true;
+        jitterSeed = int.parse(args[++i]);
+        break;
+      case '-jc':
+        jitterEnabled = true;
+        jitterScale = double.parse(args[++i]);
+        break;
+
       case '-nc':
       case '--no-colored':
         colored = false;
@@ -49,6 +67,9 @@ Future<void> main(List<String> args) async {
           '[-t temperature] '
           '[-r repeatPenalty] '
           '[-s seed] '
+          '[-j] '
+          '[-js jitterSeed] '
+          '[-jc jitterScale] '
           '[-p prompt] '
           '[-nc no-colored] '
           '[-c chatMode]',
@@ -59,6 +80,10 @@ Future<void> main(List<String> args) async {
 
   seed ??= SmolLM2.generateSeed();
 
+  if (jitterEnabled) {
+    jitterSeed ??= SmolLM2.generateSeed();
+  }
+
   if (chatMode) {
     temperature ??= TokenGenerator.defaultChatTemperature;
     repeatPenalty ??= TokenGenerator.defaultChatRepeatPenalty;
@@ -67,14 +92,22 @@ Future<void> main(List<String> args) async {
     repeatPenalty ??= TokenGenerator.defaultRepeatPenalty;
   }
 
-  final smollm = SmolLM2(logger: (o) => print(' » $o'));
-
   print('=== SmolLM2 ===');
   print(
-    '»» Parameters: maxTokens: $maxTokens ; temperature: $temperature ; repetitionPenalty: $repeatPenalty ; seed: $seed ; colored: $colored',
+    '»» Parameters: '
+    'maxTokens: $maxTokens ; '
+    'temperature: $temperature ; '
+    'repetitionPenalty: $repeatPenalty ; '
+    'seed: $seed ; '
+    'jitter: ${jitterEnabled ? 'on' : 'off'} ; '
+    'jitterSeed: ${jitterSeed ?? '-'} ; '
+    'jitterScale: ${jitterScale ?? '-'} ; '
+    'colored: $colored',
   );
 
-  await smollm.load(model);
+  final smollm = SmolLM2(logger: (o) => print(' » $o'));
+
+  await smollm.load(model, jitterSeed: jitterSeed, jitterScale: jitterScale);
 
   if (chatMode) {
     await _chatSession(
