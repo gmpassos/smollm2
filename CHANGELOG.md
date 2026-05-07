@@ -1,3 +1,53 @@
+## 1.0.6
+
+- `bin/smollm2.dart`:
+  - Added command line options `-j`, `-js`, `-jc` to enable jitter, set jitter seed, and jitter scale for model loading.
+  - Updated model loading to pass jitter parameters to `SmolLM2.load`.
+  - Added jitter-related parameters to startup logs.
+
+- `lib/src/data.dart`:
+  - Added `readU16` and `writeU16` methods to `DataReader` and `DataWriter`.
+  - Added read/write byte count tracking fields.
+  - Improved hashing extensions with two-hash variant and bit rotations.
+  - Added `RandomExtension` with methods for generating jittered floats and noise.
+  - Added `Hash64` class for incremental 64-bit hashing.
+  - Added `DurationFormatting` extension for human-readable and seconds formatting.
+
+- `lib/src/kv_cache.dart`:
+  - Added `offset` method to `KVCache` for computing buffer offsets.
+
+- `lib/src/smollm2.dart`:
+  - Added detailed documentation for `SmolLM2` class and `load` method.
+  - Added support for optional jitter during dequantization in model loading.
+  - Added jitter parameters (`jitterSeed`, `jitterRandom`, `jitterScale`) to `load`.
+  - Added timing and logging for loading phases (header, config, tokenizer, weights).
+  - Updated `_loadWeights` to accept jitter parameters and pass them to weights loader.
+  - Added `_loaded` flag and `isLoaded` getter.
+  - Refactored model loading to support jitter injection during dequantization.
+
+- `lib/src/tensor.dart`:
+  - Introduced abstract `QTensor` base class for quantized tensors with multiple dequantization methods.
+  - Added jittered and adaptive dequantization methods with optional stochastic jitter.
+  - Updated `Q8Tensor` and `Q16Tensor` to support jittered dequantization via `toFP32Tensor` method.
+  - Added default jitter scale constants for Q8 and Q16 tensors.
+  - Dequantization now optionally applies jitter when a `Random` instance is provided.
+
+- `lib/src/token_generator.dart`:
+  - Updated `TokenGenerationResult.statsSummary` to use new duration formatting extensions for human-readable timing.
+
+- `lib/src/weights.dart`:
+  - Updated `ModelWeights.load` and internal loading methods to accept jitter parameters.
+  - Passed jitter parameters through to tensor reading methods.
+  - Updated `_readQ8` and `_readQ16` to support jittered FP32 tensor conversion.
+  - Added jitter scale defaults for Q8 and Q16 tensors.
+
+- `pubspec.yaml`:
+  - Updated dev dependencies:
+    - `lints` from ^6.0.0 to ^6.1.0
+    - `test` from ^1.25.6 to ^1.31.1
+    - `huggingface_downloader` from ^1.0.0 to ^1.0.1
+    - `path` from ^1.9.0 to ^1.9.1
+
 ## 1.0.5
 
 - Documentation (`README.md`):

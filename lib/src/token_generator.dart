@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'data.dart';
+
 /// Identifies the origin or termination state of an emitted token.
 ///
 /// During prompt ingestion, all prompt tokens are emitted with [prompt].
@@ -163,8 +165,6 @@ class TokenGenerationResult {
   /// - performance diagnostics,
   /// - inference summaries.
   String statsSummary() {
-    String fmt(Duration d) => (d.inMicroseconds / 1000000.0).toStringAsFixed(3);
-
     return '''
 === Token Generation Stats ===
 prompt.length    : ${prompt.length}
@@ -181,9 +181,9 @@ prompt tokens    : $promptTokens
 generated tokens : $generatedTokens
 total tokens     : $totalTokens
 
-prompt ingest    : ${fmt(promptDuration)} s (${promptTokensPerSecond.toStringAsFixed(2)} tk/s)
-generation       : ${fmt(generationDuration)} s (${generatedTokensPerSecond.toStringAsFixed(2)} tk/s)
-total            : ${fmt(totalDuration)} s (${totalTokensPerSecond.toStringAsFixed(2)} tk/s)
+prompt ingest    : ${promptDuration.formattedToSeconds} s (${promptTokensPerSecond.toStringAsFixed(2)} tk/s)
+generation       : ${generationDuration.formattedToSeconds} s (${generatedTokensPerSecond.toStringAsFixed(2)} tk/s)
+total            : ${totalDuration.formattedToSeconds} s (${totalTokensPerSecond.toStringAsFixed(2)} tk/s)
 ''';
   }
 

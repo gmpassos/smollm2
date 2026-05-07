@@ -8,10 +8,16 @@ import 'config.dart';
 import 'data.dart';
 import 'kv_cache.dart';
 import 'quant_type.dart';
+import 'tensor.dart';
 import 'token_generator.dart';
 import 'tokenizer.dart';
 import 'weights.dart';
 
+/// SmolLM2 model loader and runtime interface.
+///
+/// Responsible for loading a quantized model (Q16) and preparing it
+/// for inference in FP32, optionally applying controlled jitter during
+/// dequantization to improve numerical robustness or variability.
 class SmolLM2 implements TokenGenerator {
   final void Function(Object?)? logger;
 
@@ -48,19 +54,73 @@ class SmolLM2 implements TokenGenerator {
   late final Float32List hb;
   late final Float32List hb2;
 
-  Future<void> load(String modelPath) async {
-    log('Loading model: $modelPath ...');
+  bool _loaded = false;
 
-    final modelFile = await File(modelPath).open();
-    final dataReader = DataReader(modelFile);
+  /// Whether the model has been successfully loaded and is ready for inference.
+  bool get isLoaded => _loaded;
+
+  /// Loads a SmolLM2 model from [modelPath] and prepares it for inference.
+  ///
+  /// This process reads the quantized weights (Q16) and converts them to FP32.
+  /// Optionally, a controlled dequantization jitter can be applied to introduce
+  /// small stochastic variations in the weights. This may reduce quantization
+  /// artifacts but can introduce slight nondeterminism depending on configuration.
+  ///
+  /// Jitter is considered enabled internally when [jitterRandom] and/or
+  /// [jitterScale] is provided, unless explicitly disabled via
+  /// [applyDequantizationJitter].
+  ///
+  /// - [modelPath]: Path to the model file.
+  ///
+  /// - [applyDequantizationJitter]: Explicitly enables or disables jitter
+  ///   during dequantization. If null, it is automatically enabled when either
+  ///   [jitterRandom] or [jitterScale] is provided.
+  ///
+  /// - [jitterRandom]: Optional random generator used to produce deterministic
+  ///   jitter when seeded. If null while jitter is enabled, a default RNG is
+  ///   created internally.
+  ///
+  /// - [jitterScale]: Controls the magnitude of the injected jitter. Typical
+  ///   values are small (e.g. 0.01). If null, a default scale is used.
+  Future<void> load(
+    String modelPath, {
+    bool? applyDequantizationJitter,
+    int? jitterSeed,
+    math.Random? jitterRandom,
+    double? jitterScale,
+  }) async {
+    if (_loaded) return;
+    _loaded = true;
+
+    var modelFile = File(modelPath);
+
+    var modelFileLength = await modelFile.length();
+
+    log('Loading model: $modelPath ($modelFileLength bytes) ...');
+
+    applyDequantizationJitter ??=
+        jitterRandom != null || jitterScale != null || jitterSeed != null;
+
+    if (applyDequantizationJitter) {
+      // Ensure that jitter is enabled:
+      jitterRandom ??= math.Random(jitterSeed);
+    } else {
+      // Disable jitter:
+      jitterRandom = null;
+    }
+
+    final loadStart = Stopwatch()..start();
+
+    final modelIO = await modelFile.open();
+    final dataReader = DataReader(modelIO);
 
     final quantType = _loadHeader(dataReader);
 
     _loadConfig(dataReader, quantType);
     _loadTokenizer(dataReader);
-    _loadWeights(dataReader);
+    _loadWeights(dataReader, jitterRandom, jitterScale);
 
-    await modelFile.close();
+    await modelIO.close();
 
     _precomputeRope();
     _buildKVCaches();
@@ -81,7 +141,11 @@ class SmolLM2 implements TokenGenerator {
     hb = Float32List(config.intermediateSize);
     hb2 = Float32List(config.intermediateSize);
 
-    log('Model loaded');
+    loadStart.stop();
+
+    log(
+      'Model fully loaded 🚀 (${loadStart.elapsed.formattedToHumanReadable})',
+    );
   }
 
   void _buildKVCaches() {
@@ -115,6 +179,8 @@ class SmolLM2 implements TokenGenerator {
   }
 
   void _loadConfig(DataReader dataReader, QuantType quantType) {
+    final loadStart = Stopwatch()..start();
+
     final hiddenSize = dataReader.readU32();
     final intermediateSize = dataReader.readU32();
     final numLayers = dataReader.readU32();
@@ -142,10 +208,14 @@ class SmolLM2 implements TokenGenerator {
       headDim: headDim,
     );
 
-    log(config);
+    loadStart.stop();
+
+    log('Loaded (${loadStart.elapsed.formattedToHumanReadable}): $config');
   }
 
   void _loadTokenizer(DataReader dataReader) {
+    final loadStart = Stopwatch()..start();
+
     final vocabLength = dataReader.readU32();
     final mergesLength = dataReader.readU32();
 
@@ -157,13 +227,44 @@ class SmolLM2 implements TokenGenerator {
     });
 
     tokenizer = Tokenizer(vocab: vocab, merges: merges);
-    log(tokenizer);
+
+    loadStart.stop();
+
+    log('Loaded (${loadStart.elapsed.formattedToHumanReadable}): $tokenizer');
   }
 
-  void _loadWeights(DataReader dataReader) {
+  void _loadWeights(
+    DataReader dataReader,
+    math.Random? jitterRandom,
+    double? jitterScale,
+  ) {
+    if (jitterRandom != null) {
+      jitterScale ??= config.quantType == QuantType.q8
+          ? Q8Tensor.defaultQ8DequantizationJitterScale
+          : Q16Tensor.defaultQ16DequantizationJitterScale;
+
+      log(
+        'Loading weights and dequantizing Q16 → FP32 with jitter injection '
+        '(jitterScale: $jitterScale)...',
+      );
+    } else {
+      log('Loading weights...');
+    }
+
+    final loadStart = Stopwatch()..start();
+
     weights = ModelWeights(config);
-    weights.load(config, dataReader);
-    log(weights);
+
+    weights.load(
+      config,
+      dataReader,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+    );
+
+    loadStart.stop();
+
+    log('Loaded (${loadStart.elapsed.formattedToHumanReadable}): $weights');
   }
 
   void _precomputeRope() {

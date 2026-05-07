@@ -24,4 +24,8 @@ class KVCache {
     maxSeqLen: config.maxSeqLen,
     headDim: config.headDim,
   );
+
+  int offset(int kvHead, int pos) {
+    return (kvHead * maxSeqLen + pos) * headDim;
+  }
 }
