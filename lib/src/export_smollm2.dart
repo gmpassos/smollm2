@@ -166,6 +166,42 @@ class Q8Quantized extends Quantized {
   String toString() => 'Q8Quantized{scale: $scale, data: ${data.length}}';
 }
 
+abstract class QuantizedPerBlock<B extends Quantized> extends Quantized {
+  final int blockSize;
+  final List<B> blocks;
+
+  QuantizedPerBlock(this.blockSize, this.blocks);
+
+  @override
+  List<int> get data => blocks.expand((b) => b.data).toList();
+
+  @override
+  (int, int) computeDataHash() {
+    return blocks
+        .map((e) => e.dataHash)
+        .reduce((a, b) => (a.$1 ^ b.$1, a.$2 ^ b.$2));
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is QuantizedPerBlock<B> &&
+          runtimeType == other.runtimeType &&
+          blockSize == other.blockSize &&
+          const ListEquality().equals(blocks, other.blocks);
+
+  @override
+  int get hashCode => Object.hash(blockSize, const ListEquality().hash(blocks));
+}
+
+class Q8QuantizedPerBlock extends QuantizedPerBlock<Q8Quantized> {
+  Q8QuantizedPerBlock(super.blockSize, super.blocks);
+
+  @override
+  String toString() =>
+      'Q8QuantizedPerBlock{blockSize: $blockSize, blocks: ${blocks.length}}';
+}
+
 class Q16Quantized extends Quantized {
   final double scale;
   @override
@@ -186,6 +222,14 @@ class Q16Quantized extends Quantized {
 
   @override
   String toString() => 'Q16Quantized{scale: $scale, data: ${data.length}}';
+}
+
+class Q16QuantizedPerBlock extends QuantizedPerBlock<Q16Quantized> {
+  Q16QuantizedPerBlock(super.blockSize, super.blocks);
+
+  @override
+  String toString() =>
+      'Q16QuantizedPerBlock{blockSize: $blockSize, blocks: ${blocks.length}}';
 }
 
 /* ---------------- Decoders ---------------- */
@@ -464,7 +508,6 @@ class SafeTensorShardRepository implements TensorRepository {
 }
 
 /* ---------------- Quantizers ---------------- */
-
 class Q8Quantizer {
   Q8Quantized quantize(Float32List src) {
     final length = src.length;
@@ -499,7 +542,26 @@ class Q8Quantizer {
     return scale;
   }
 
-    return Q8Quantized(scale, out);
+  Q8QuantizedPerBlock quantizePerBlock(Float32List src, {int blockSize = 32}) {
+    final blocks = <Q8Quantized>[];
+
+    final length = src.length;
+    var dataFull = Int8List(length);
+
+    for (int offset = 0; offset < length; offset += blockSize) {
+      final end = math.min(offset + blockSize, length);
+
+      final blockScale = _quantizeRange(src, offset, end, dataFull, offset);
+
+      final quantized = Q8Quantized(
+        blockScale,
+        Int8List.sublistView(dataFull, offset, end),
+      );
+
+      blocks.add(quantized);
+    }
+
+    return Q8QuantizedPerBlock(blockSize, blocks);
   }
 }
 
@@ -528,7 +590,6 @@ class Q16Quantizer {
     }
 
     final scale = maxAbs == 0 ? 1.0 : maxAbs / 32767.0;
-    final out = Int16List(length);
 
     for (int i = offset; i < end; i++) {
       final q = (block[i] / scale).round();
@@ -538,13 +599,25 @@ class Q16Quantizer {
     return scale;
   }
 
+  Q16QuantizedPerBlock quantizePerBlock(Float32List src, {int blockSize = 32}) {
+    final blocks = <Q16Quantized>[];
 
-    for (int i = 0; i < length; i++) {
-      final q = (src[i] / scale).round();
-      out[i] = q.clamp(-32767, 32767);
+    final length = src.length;
+    var dataFull = Int16List(length);
+
+    for (int offset = 0; offset < length; offset += blockSize) {
+      final end = math.min(offset + blockSize, length);
+      var blockScale = _quantizeRange(src, offset, end, dataFull, offset);
+
+      var quantized = Q16Quantized(
+        blockScale,
+        Int16List.sublistView(dataFull, offset, end),
+      );
+
+      blocks.add(quantized);
     }
 
-    return Q16Quantized(scale, out);
+    return Q16QuantizedPerBlock(blockSize, blocks);
   }
 }
 
@@ -561,18 +634,16 @@ class TensorBinaryWriter {
   Future<void> writeTensor(Float32List tensor, QuantType type) async {
     switch (type) {
       case QuantType.q8:
-        final q = q8.quantize(tensor);
-        final dataHash = q.dataHash;
-        dataWriter.writeF32(q.scale);
-        dataWriter.writeU32(dataHash.$1);
-        dataWriter.writeU32(dataHash.$2);
-        dataWriter.writeBytes(q.data.buffer.asUint8List());
-        break;
+        //await writeTensorQ8PerBlock(tensor);
         writeTensorQ8(tensor);
         break;
 
       case QuantType.q16:
         writeTensorQ16(tensor);
+        break;
+
+      case QuantType.q16PerBlock:
+        writeTensorQ16PerBlock(tensor);
         break;
 
       case QuantType.bf16:
@@ -596,17 +667,40 @@ class TensorBinaryWriter {
     dataWriter.writeBytes(q.data.buffer.asUint8List());
   }
 
+  Future<void> writeTensorQ8PerBlock(Float32List tensor) async {
+    final q = q8.quantizePerBlock(tensor);
 
-      case QuantType.q16:
-        final q = q16.quantize(tensor);
-        final dataHash = q.dataHash;
-        dataWriter.writeF32(q.scale);
-        dataWriter.writeU32(dataHash.$1);
-        dataWriter.writeU32(dataHash.$2);
-        final bd = ByteData(q.data.length * 2);
-        for (int i = 0; i < q.data.length; i++) {
-          bd.setInt16(i * 2, q.data[i], Endian.little);
-        }
+    await dataWriter.writeU16(q.blockSize);
+
+    for (final block in q.blocks) {
+      final data = block.data;
+      final len = data.length;
+      final hash = block.dataHash;
+
+      // 4 bytes (f32) + 4 + 4 (u32 + u32) + data (len * 1) (int8)
+      final bytes = Uint8List(12 + len);
+      final bd = ByteData.sublistView(bytes);
+
+      int offset = 0;
+
+      // scale (f32)
+      bd.setFloat32(offset, block.scale, Endian.little);
+      offset += 4;
+
+      // hash1
+      bd.setUint32(offset, hash.$1, Endian.little);
+      offset += 4;
+
+      // hash2
+      bd.setUint32(offset, hash.$2, Endian.little);
+      offset += 4;
+
+      // int8 data (bulk copy, no loop)
+      bytes.setRange(offset, offset + len, data);
+
+      dataWriter.writeBytes(bytes);
+    }
+  }
 
   void writeTensorQ16(Float32List tensor) {
     final q = q16.quantize(tensor);
@@ -627,6 +721,7 @@ class TensorBinaryWriter {
 
     dataWriter.writeBytes(bd.buffer.asUint8List());
   }
+
   void writeTensorQ16PerBlock(Float32List tensor) {
     final q = q16.quantizePerBlock(tensor);
 
@@ -640,14 +735,34 @@ class TensorBinaryWriter {
       final len = data.length;
       final hash = block.dataHash;
 
-      case QuantType.fp32:
-        final bd = ByteData(tensor.length * 4);
-        for (int i = 0; i < tensor.length; i++) {
-          bd.setFloat32(i << 2, tensor[i], Endian.little);
-        }
-        dataWriter.writeBytes(bd.buffer.asUint8List());
-        break;
+      // scale + hashes + data in one buffer:
+      // 4 bytes (f32) + 4 + 4 bytes (u32 + u32) + data (len * 2) (int16)
+      final bytes = Uint8List(4 + 4 + 4 + len * 2);
+      final bd = ByteData.sublistView(bytes);
+
+      int offset = 0;
+
+      // scale (f32)
+      bd.setFloat32(offset, block.scale, Endian.little);
+      offset += 4;
+
+      // hash1
+      bd.setUint32(offset, hash.$1, Endian.little);
+      offset += 4;
+
+      // hash2
+      bd.setUint32(offset, hash.$2, Endian.little);
+      offset += 4;
+
+      // quantized data
+      for (int i = 0; i < len; i++) {
+        bd.setInt16(offset, data[i], Endian.little);
+        offset += 2;
+      }
+
+      dataWriter.writeBytes(bytes);
     }
+  }
 
   void writeTensorBF16(Float32List tensor) {
     final out = ByteData(tensor.length * 2);
