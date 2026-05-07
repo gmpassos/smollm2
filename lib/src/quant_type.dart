@@ -1,7 +1,7 @@
 enum QuantType {
   q8(1),
   q16(2),
-  fp32(3);
+  q16PerBlock(3),
   bf16(4),
   fp32(5);
 
