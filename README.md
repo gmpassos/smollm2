@@ -1,10 +1,10 @@
 # smollm2
 
-[![pub package](https://img.shields.io/pub/v/smollm2.svg?logo=dart&logoColor=00b9fc)](https://pub.dev/packages/smollm2)
+[![pub package](https://img.shields.io/pub/v/smollm2.svg?logo=dart\&logoColor=00b9fc)](https://pub.dev/packages/smollm2)
 [![Null Safety](https://img.shields.io/badge/null-safety-brightgreen)](https://dart.dev/null-safety)
-[![GitHub Tag](https://img.shields.io/github/v/tag/gmpassos/smollm2?logo=git&logoColor=white)](https://github.com/gmpassos/smollm2/releases)
-[![Last Commit](https://img.shields.io/github/last-commit/gmpassos/smollm2?logo=github&logoColor=white)](https://github.com/gmpassos/smollm2/commits/master)
-[![License](https://img.shields.io/github/license/gmpassos/smollm2?logo=open-source-initiative&logoColor=green)](https://github.com/gmpassos/smollm2/blob/master/LICENSE)
+[![GitHub Tag](https://img.shields.io/github/v/tag/gmpassos/smollm2?logo=git\&logoColor=white)](https://github.com/gmpassos/smollm2/releases)
+[![Last Commit](https://img.shields.io/github/last-commit/gmpassos/smollm2?logo=github\&logoColor=white)](https://github.com/gmpassos/smollm2/commits/master)
+[![License](https://img.shields.io/github/license/gmpassos/smollm2?logo=open-source-initiative\&logoColor=green)](https://github.com/gmpassos/smollm2/blob/master/LICENSE)
 
 `smollm2` is a **pure Dart LLM inference engine, local language model runtime, and Hugging Face exporter for SmolLM2 language models**.
 
@@ -12,7 +12,7 @@ It allows you to:
 
 * run **SmolLM2 text generation locally**
 * export Hugging Face SmolLM2 checkpoints into an optimized Dart binary format
-* use **Q8** or **Q16** quantized weights
+* use **BF16**, **Q8**, or **Q16** weights
 * generate deterministic or seeded outputs
 * embed inference directly inside Dart applications
 
@@ -24,15 +24,18 @@ No Python runtime, no llama.cpp dependency, and no external native bindings are 
 
 * 🧠 Pure Dart transformer inference
 * ⚡ SIMD optimized math kernels
-* 💾 Built-in Q8 and Q16 quantization formats
+* 💾 Built-in BF16, Q8 and Q16 formats
 * 🔁 KV cache for autoregressive generation
 * 🌀 RoPE positional embeddings
 * 🎲 Temperature + repetition penalty + deterministic seed
+
 - 💬 Chat mode with conversation memory
 - 🖥 CLI tool included
+
 * 🔧 Programmatic API for Dart apps
 
 ---
+
 ## TL;DR - I just want to chat with a local LLM
 
 ### If you don’t have Dart SDK yet
@@ -79,9 +82,23 @@ huggingface_downloader \
 
 ---
 
-### Export model to SMOL format (Q16)
+### Export model to SMOL format (BF16 / Q16)
 
-**Convert Hugging Face checkpoint into a high-precision single binary (Q16) for better output quality. This generates a `*-q16.bin` file inside the folder:**
+**Convert Hugging Face checkpoint into a single optimized binary.**
+
+**BF16 provides the best numeric fidelity and preserves the original model weights more accurately.**
+
+```bash
+export_smollm2 -BF16 models/smollm2-135m/
+```
+
+(or)
+
+```bash
+export_smollm2 -BF16 models/smollm2-360m/
+```
+
+**Q16 provides a smaller high-precision quantized format with reduced memory usage.**
 
 ```bash
 export_smollm2 -Q16 models/smollm2-135m/
@@ -103,11 +120,27 @@ export_smollm2 -Q16 models/smollm2-360m/
 
 ```bash
 smollm2 \
+  -m models/smollm2-135m/smollm2-bf16.bin \
+  -c
+```
+
+or:
+
+```bash
+smollm2 \
   -m models/smollm2-135m/smollm2-q16.bin \
   -c
 ```
 
 **360M model**
+
+```bash
+smollm2 \
+  -m models/smollm2-360m/smollm2-bf16.bin \
+  -c
+```
+
+or:
 
 ```bash
 smollm2 \
@@ -175,6 +208,12 @@ or:
 export_smollm2 -Q16 models/smollm2-135m-instruct/
 ```
 
+or:
+
+```bash
+export_smollm2 -BF16 models/smollm2-135m-instruct/
+```
+
 Expected directory contents:
 
 ```text
@@ -193,10 +232,18 @@ model.index.json + shard files
 
 The exporter automatically detects whether the model is single-file or sharded.
 
-Generated output example:
+Generated output examples:
 
 ```text
 models/smollm2-135m-instruct/smollm2-q8.bin
+```
+
+```text
+models/smollm2-135m-instruct/smollm2-q16.bin
+```
+
+```text
+models/smollm2-135m-instruct/smollm2-bf16.bin
 ```
 
 ---
@@ -215,8 +262,9 @@ smollm2-q8.bin
 
 ### Export Notes
 
-Available quantization formats:
+Available formats:
 
+* `-BF16` → best numeric fidelity, larger file
 * `-Q8` → smaller file, faster loading
 * `-Q16` → larger file, better numeric precision
 
@@ -241,7 +289,7 @@ This binary format stores, in sequence:
 * model configuration
 * tokenizer vocabulary
 * tokenizer merge pairs
-* all transformer tensors already converted to the selected quantized representation
+* all transformer tensors already converted to the selected representation
 
 Unlike Hugging Face safetensors, which require parsing many named tensors and JSON metadata at runtime, the `SMOL`
 format is a **direct sequential memory layout**. This allows the Dart engine to read the file in one pass with minimal
@@ -253,7 +301,7 @@ Additional advantages:
 * much lower parsing complexity
 * portable single-file deployment
 * deterministic tensor ordering
-* direct compatibility with Q8/Q16 internal kernels
+* direct compatibility with BF16/Q8/Q16 internal kernels
 
 The file begins with the magic bytes `SMOL`, followed by a version field, making the format extensible for future
 quantization modes and runtime improvements.
@@ -498,7 +546,7 @@ Future<void> main() async {
 Controls randomness.
 
 | Value       | Behavior                     |
-|-------------|------------------------------|
+| ----------- | ---------------------------- |
 | `0.0`       | Fully deterministic / greedy |
 | `0.2 - 0.5` | Conservative                 |
 | `0.6 - 0.9` | Balanced                     |
@@ -513,7 +561,7 @@ Discourages token loops and repeated phrases.
 Typical values:
 
 | Value         | Behavior       |
-|---------------|----------------|
+| ------------- | -------------- |
 | `1.00`        | disabled       |
 | `1.05 - 1.10` | light control  |
 | `1.10 - 1.20` | strong control |
