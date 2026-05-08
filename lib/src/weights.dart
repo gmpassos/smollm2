@@ -192,6 +192,16 @@ class ModelWeights {
               jitterScale ?? Q16Tensor.defaultQ16DequantizationJitterScale,
           fp32: fp32,
         );
+      case QuantType.bf16:
+        return _readBF16(
+          br,
+          rows,
+          cols,
+          jitterRandom: jitterRandom,
+          jitterScale:
+              jitterScale ?? Q16Tensor.defaultQ16DequantizationJitterScale,
+          fp32: fp32,
+        );
       default:
         throw UnsupportedError("quantType: $quantType");
     }
@@ -227,6 +237,7 @@ class ModelWeights {
     double jitterScale = Q16Tensor.defaultQ16DequantizationJitterScale,
   }) {
     final q16 = Q16Tensor.readFrom(br, rows, cols);
+    //final q16 = Q16PerBlockTensor.readFrom(br, rows, cols);
 
     if (fp32) {
       return q16.toFP32Tensor(
@@ -237,6 +248,23 @@ class ModelWeights {
     }
 
     return q16;
+  }
+
+  Tensor _readBF16(
+    DataReader br,
+    int rows,
+    int cols, {
+    bool fp32 = false,
+    math.Random? jitterRandom,
+    double jitterScale = Q16Tensor.defaultQ16DequantizationJitterScale,
+  }) {
+    final bf16 = BF16Tensor.readFromH(br, rows, cols);
+
+    if (fp32) {
+      return bf16.toFP32Tensor(cached: false);
+    }
+
+    return bf16;
   }
 
   @override

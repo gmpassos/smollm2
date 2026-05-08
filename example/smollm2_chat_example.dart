@@ -4,7 +4,7 @@ import 'package:smollm2/smollm2.dart';
 
 Future<void> main() async {
   final smollm = SmolLM2();
-  await smollm.load('models/smollm2-135m-instruct/smollm2-q16.bin');
+  await smollm.load('models/smollm2-360m-instruct/smollm2-bf16.bin');
 
   final chat = ChatSession(seed: 12345);
   chat.addSystem('You are a helpful assistant.');
@@ -15,7 +15,7 @@ Future<void> main() async {
     stdout.write(s);
   }
 
-  print('Chat ready. Type "exit" to quit.');
+  print('[Chat ready. Type "exit" to quit]');
 
   while (true) {
     stdout.write('\nYou › ');
@@ -56,3 +56,30 @@ Future<void> main() async {
   print('Full processed text:\n');
   print(smollm.fullText);
 }
+
+// OUTPUT:
+/*
+[Chat ready. Type "exit" to quit]
+
+You › Hello!
+ AI › Hello! How can I help you today?
+
+You › What is Dart?
+ AI › Dart is a general-purpose, statically-typed, multi-paradigm language developed by Google. It's used for web development, mobile app development, and Android app development.
+
+You › exit
+----------------------------------------------------
+Full processed text:
+
+<|im_start|>system
+You are a helpful assistant.<|im_end|>
+<|im_start|>user
+Hello!<|im_end|>
+<|im_start|>assistant
+Hello! How can I help you today?<|im_end|>
+<|im_start|>user
+What is Dart?<|im_end|>
+<|im_start|>assistant
+Dart is a general-purpose, statically-typed, multi-paradigm language developed by Google. It's used for web development, mobile app development, and Android app development.<|im_end|>
+
+*/

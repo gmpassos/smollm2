@@ -5,6 +5,9 @@
   - Updated model loading to pass jitter parameters to `SmolLM2.load`.
   - Added jitter-related parameters to startup logs.
 
+- `bin/export_smollm2.dart`:
+  - Added support for `-BF16` quantization flag.
+
 - `lib/src/data.dart`:
   - Added `readU16` and `writeU16` methods to `DataReader` and `DataWriter`.
   - Added read/write byte count tracking fields.
@@ -16,6 +19,10 @@
 - `lib/src/kv_cache.dart`:
   - Added `offset` method to `KVCache` for computing buffer offsets.
 
+- `lib/src/quant_type.dart`:
+  - Added new quant types: `q16PerBlock`, `bf16`.
+  - Updated factory to support new quant types.
+
 - `lib/src/smollm2.dart`:
   - Added detailed documentation for `SmolLM2` class and `load` method.
   - Added support for optional jitter during dequantization in model loading.
@@ -24,22 +31,36 @@
   - Updated `_loadWeights` to accept jitter parameters and pass them to weights loader.
   - Added `_loaded` flag and `isLoaded` getter.
   - Refactored model loading to support jitter injection during dequantization.
+  - Improved `rmsNorm` and `applyRope` implementations.
+  - Updated `forward` method to fix KV cache writes and optimize attention computation.
+  - Updated `tokenize` and `decode` to use new `TokenizerEngine`.
+  - Updated `sample` method to support eager greedy sampling and improved repeat penalty logic.
 
 - `lib/src/tensor.dart`:
   - Introduced abstract `QTensor` base class for quantized tensors with multiple dequantization methods.
   - Added jittered and adaptive dequantization methods with optional stochastic jitter.
   - Updated `Q8Tensor` and `Q16Tensor` to support jittered dequantization via `toFP32Tensor` method.
   - Added default jitter scale constants for Q8 and Q16 tensors.
-  - Dequantization now optionally applies jitter when a `Random` instance is provided.
+  - Added new `BF16Tensor` class with FP32 conversion and dot product support.
 
 - `lib/src/token_generator.dart`:
   - Updated `TokenGenerationResult.statsSummary` to use new duration formatting extensions for human-readable timing.
 
+- `lib/src/tokenizer.dart`:
+  - Added support for added/special tokens in tokenizer.
+  - Refactored tokenizer to use `TokenizerEngine` for tokenization and decoding.
+  - `TokenizerEngine`:
+    - Supports matching added tokens first (longest match).
+    - Handles space and newline tokens explicitly.
+    - Applies BPE merges using merge rank map.
+    - Decodes tokens with whitespace and newline replacements.
+
 - `lib/src/weights.dart`:
   - Updated `ModelWeights.load` and internal loading methods to accept jitter parameters.
   - Passed jitter parameters through to tensor reading methods.
-  - Updated `_readQ8` and `_readQ16` to support jittered FP32 tensor conversion.
-  - Added jitter scale defaults for Q8 and Q16 tensors.
+  - Updated `_readQ8`, `_readQ16`, to support jittered FP32 tensor conversion.
+  - added `_readBF16`.
+  - Added support for BF16 quantization type.
 
 - `pubspec.yaml`:
   - Updated dev dependencies:
@@ -47,6 +68,21 @@
     - `test` from ^1.25.6 to ^1.31.1
     - `huggingface_downloader` from ^1.0.0 to ^1.0.1
     - `path` from ^1.9.0 to ^1.9.1
+
+- Added new example files:
+  - `example/smollm2_completion_example.dart`: Basic text completion example using 360m BF16 model.
+  - `example/smollm2_chat_example.dart`: Interactive multi-turn chat session example updated to use 360m BF16 model.
+  - `example/smollm2_rs_in_strawberry_example.dart`: Prompt formatting and reasoning example using 360m BF16 model.
+  - Added `example/example.md` with detailed usage instructions and example code snippets.
+  - Removed deprecated example file `example/smollm2_example.dart`.
+
+- Tests:
+  - Added `test/smollm2_vocab.dart` containing encoded tokenizer vocabulary and merges.
+  - Added `test/tokenizer_test.dart` with comprehensive tokenizer unit tests covering added tokens, BPE merges, and chat template encoding.
+  - Updated `test/smollm2_test.dart` integration tests:
+    - Added tests for 135M and 360M models including download, export, load, and deterministic generation.
+    - Added test coverage for jittered model loading and generation.
+    - Cleaned up temporary directories after tests.
 
 ## 1.0.5
 
