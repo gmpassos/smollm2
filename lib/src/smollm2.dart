@@ -35,9 +35,6 @@ class SmolLM2 implements TokenGenerator {
 
   late final ModelWeights weights;
 
-  late final Float32List ropeCos;
-  late final Float32List ropeSin;
-
   late final List<KVCache> kvCaches;
 
   late final Float32ListX4 x;
@@ -366,8 +363,6 @@ class SmolLM2 implements TokenGenerator {
 
   void forward(final int tok) {
     final pos = _totalTokens++;
-    _contextTokens++;
-
     final c = config;
     final w = weights;
 
@@ -377,35 +372,22 @@ class SmolLM2 implements TokenGenerator {
     final nkv = c.numKvHeads;
     final ng = nh ~/ nkv;
 
-    final emb = w.embedTokens.toFP32Tensor(cached: true).data.list;
-
-    final x = this.x;
     final xList = x.list;
-
-    final xb = this.xb;
     final xbList = xb.list;
-
-    final xb2 = this.xb2;
     final xb2List = xb2.list;
 
-    final att = this.att;
+    final emb = w.embedTokens.toFP32Tensor(cached: true).data.list;
 
+    // Embedding:
     {
       final embOffset = tok * hs;
-
-      // -------------------------
-      // Embedding
-      // -------------------------
       xList.setRange(0, hs, emb, embOffset);
     }
 
-    final scale = 1.0 / math.sqrt(hd.toDouble());
+    final attScale = 1.0 / math.sqrt(hd.toDouble());
 
-    // -------------------------
-    // Layers
-    // -------------------------
     for (int l = 0; l < c.numLayers; l++) {
-      final lw = w.layers[l];
+      final layer = w.layers[l];
       final kv = kvCaches[l];
 
       final kCache = kv.kCache;
@@ -415,48 +397,34 @@ class SmolLM2 implements TokenGenerator {
       final attSize = c.maxSeqLen;
 
       // -------------------------
-      // RMSNorm (input)
+      // Norm
       // -------------------------
-      rmsNorm(xb, x, lw.inputLayerNorm.data, hs, c.rmsNormEps);
+      rmsNorm(xb, x, layer.inputLayerNorm.data, hs, c.rmsNormEps);
 
-      // -------------------------
-      // QKV projections
-      // -------------------------
-      lw.qProj.dotTo(q, xb);
-      lw.kProj.dotTo(k, xb);
-      lw.vProj.dotTo(v, xb);
+      layer.qProj.dotTo(q, xb);
+      layer.kProj.dotTo(k, xb);
+      layer.vProj.dotTo(v, xb);
 
       // -------------------------
       // RoPE
       // -------------------------
-
-      {
-        final ropeOffset = pos * hd;
-        for (int h = 0; h < nh; h++) {
-          applyRope(q, h * hd, hd, ropeCos, ropeSin, ropeOffset);
-        }
-        for (int h = 0; h < nkv; h++) {
-          applyRope(k, h * hd, hd, ropeCos, ropeSin, ropeOffset);
-        }
+      for (int h = 0; h < nh; h++) {
+        applyRope(q, h * hd, hd, pos);
+      }
+      for (int h = 0; h < nkv; h++) {
+        applyRope(k, h * hd, hd, pos);
       }
 
       // -------------------------
-      // KV cache write (FAST)
+      // KV cache write (FIXED: use kvh)
       // -------------------------
-      {
-        final seqStride = c.maxSeqLen * hd;
-        final dstOff = kv.cacheLen * hd;
+      for (int h = 0; h < nkv; h++) {
+        final dst = kv.offset(h, kv.cacheLen);
+        final src = h * hd;
 
-        var src = 0;
-        var dst = dstOff;
-
-        for (int h = 0; h < nkv; h++) {
-          var end = dst + hd;
-          kCache.setRange(dst, end, k, src);
-          vCache.setRange(dst, end, v, src);
-
-          src += hd;
-          dst += seqStride;
+        for (int i = 0; i < hd; i++) {
+          kCache[dst + i] = k[src + i];
+          vCache[dst + i] = v[src + i];
         }
       }
 
@@ -467,45 +435,37 @@ class SmolLM2 implements TokenGenerator {
 
       for (int h = 0; h < nh; h++) {
         final kvh = h ~/ ng;
-
         final qOff = h * hd;
+
         final cacheBase = kvh * c.maxSeqLen * hd;
         final attBase = h * attSize;
 
-        final q = this.q;
-        final k = kCache;
-        final v = vCache;
-
+        // compute scores
         for (int t = 0; t < slen; t++) {
-          final kOff = cacheBase + t * hd;
+          if (t > pos) {
+            att[attBase + t] = -1e9;
+          } else {
+            final kOff = cacheBase + t * hd;
+            double score = 0.0;
 
-          double sum = 0.0;
+            for (int d = 0; d < hd; d++) {
+              score += q[qOff + d] * kCache[kOff + d];
+            }
 
-          // unrolled dot (fast in Dart VM)
-          for (int d = 0; d < hd; d += 4) {
-            final i = qOff + d;
-            final j = kOff + d;
-
-            sum +=
-                q[i] * k[j] +
-                q[i + 1] * k[j + 1] +
-                q[i + 2] * k[j + 2] +
-                q[i + 3] * k[j + 3];
+            att[attBase + t] = score * attScale;
           }
-
-          att[attBase + t] = sum * scale;
         }
 
         softmaxSegment(att, attBase, slen);
 
-        final outOff = h * hd;
+        final outOffset = h * hd;
 
         for (int t = 0; t < slen; t++) {
           final a = att[attBase + t];
           final vOff = cacheBase + t * hd;
 
           for (int d = 0; d < hd; d++) {
-            xb2List[outOff + d] += a * v[vOff + d];
+            xb2List[outOffset + d] += a * vCache[vOff + d];
           }
         }
       }
@@ -513,7 +473,7 @@ class SmolLM2 implements TokenGenerator {
       // -------------------------
       // Output projection
       // -------------------------
-      lw.oProj.dotTo(xbList, xb2);
+      layer.oProj.dotTo(xbList, xb2);
 
       for (int i = 0; i < hs; i++) {
         xList[i] += xbList[i];
@@ -522,20 +482,18 @@ class SmolLM2 implements TokenGenerator {
       // -------------------------
       // MLP
       // -------------------------
-      rmsNorm(xb, x, lw.postAttentionLayerNorm.data, hs, c.rmsNormEps);
+      rmsNorm(xb, x, layer.postAttentionLayerNorm.data, hs, c.rmsNormEps);
 
-      lw.gateProj.dotTo(this.hb, xb);
-      lw.upProj.dotTo(this.hb2, xb);
+      layer.gateProj.dotTo(hb, xb);
+      layer.upProj.dotTo(hb2, xb);
 
-      final hb = this.hb;
-      final hb2 = this.hb2;
       final inter = c.intermediateSize;
 
       for (int i = 0; i < inter; i++) {
         hb[i] = silu(hb[i]) * hb2[i];
       }
 
-      lw.downProj.dotTo(xbList, hb.asFloat32ListX4);
+      layer.downProj.dotTo(xbList, hb.asFloat32ListX4);
 
       for (int i = 0; i < hs; i++) {
         xList[i] += xbList[i];
@@ -552,19 +510,14 @@ class SmolLM2 implements TokenGenerator {
     // -------------------------
     // Logits
     // -------------------------
-    final embF = w.embedTokens.toFP32Tensor(cached: true).data.list;
     final logits = this.logits;
 
     for (int i = 0; i < c.vocabSize; i++) {
-      double sum = 0.0;
       final row = i * hs;
 
-      for (int j = 0; j < hs; j += 4) {
-        sum +=
-            xList[j] * embF[row + j] +
-            xList[j + 1] * embF[row + j + 1] +
-            xList[j + 2] * embF[row + j + 2] +
-            xList[j + 3] * embF[row + j + 3];
+      double sum = 0.0;
+      for (int j = 0; j < hs; j++) {
+        sum += xList[j] * emb[row + j];
       }
 
       logits[i] = sum;
