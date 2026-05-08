@@ -169,8 +169,10 @@ class SmolLM2 implements TokenGenerator {
       final qt = dataReader.readU32();
       dataReader.readU32();
       final quantType = QuantType.withValue(qt);
-      if (quantType != QuantType.q8 && quantType != QuantType.q16) {
-        throw Exception('Q8 and Q16 only');
+      if (quantType != QuantType.q8 &&
+          quantType != QuantType.q16 &&
+          quantType != QuantType.bf16) {
+        throw Exception('Q8, Q16 and BF16 only');
       }
       return quantType;
     }
@@ -216,17 +218,7 @@ class SmolLM2 implements TokenGenerator {
   void _loadTokenizer(DataReader dataReader) {
     final loadStart = Stopwatch()..start();
 
-    final vocabLength = dataReader.readU32();
-    final mergesLength = dataReader.readU32();
-
-    final vocab = List.generate(vocabLength, (_) => dataReader.readString());
-    final merges = List.generate(mergesLength, (_) {
-      var a = dataReader.readString();
-      var b = dataReader.readString();
-      return (a, b);
-    });
-
-    tokenizer = Tokenizer(vocab: vocab, merges: merges);
+    tokenizer = Tokenizer.loadFrom(dataReader);
 
     loadStart.stop();
 
@@ -267,6 +259,9 @@ class SmolLM2 implements TokenGenerator {
     log('Loaded (${loadStart.elapsed.formattedToHumanReadable}): $weights');
   }
 
+  late Float32List ropeCos; // [maxSeqLen * headDim/2]
+  late Float32List ropeSin;
+
   void _precomputeRope() {
     final hd = config.headDim;
     final maxLen = config.maxSeqLen;
@@ -281,11 +276,11 @@ class SmolLM2 implements TokenGenerator {
         final c = math.cos(p * freq);
         final s = math.sin(p * freq);
 
-        ropeCos[p * hd + i] = c.toDouble();
-        ropeCos[p * hd + hd ~/ 2 + i] = c.toDouble();
+        ropeCos[p * hd + i] = c;
+        ropeCos[p * hd + i + hd ~/ 2] = c;
 
-        ropeSin[p * hd + i] = s.toDouble();
-        ropeSin[p * hd + hd ~/ 2 + i] = s.toDouble();
+        ropeSin[p * hd + i] = s;
+        ropeSin[p * hd + i + hd ~/ 2] = s;
       }
     }
   }
@@ -299,6 +294,8 @@ class SmolLM2 implements TokenGenerator {
     final int n,
     final double eps,
   ) {
+    if (n == 0) return;
+
     final outList = out.list;
     final outListX4 = out.listX4;
 
@@ -308,7 +305,7 @@ class SmolLM2 implements TokenGenerator {
     final wList = w.list;
     final wList4 = w.listX4;
 
-    final n4 = n >> 2;
+    final n4 = n ~/ 4;
 
     Float32x4 ssVec;
     {
@@ -324,8 +321,6 @@ class SmolLM2 implements TokenGenerator {
       ssVec += v * v;
     }
 
-    //ssVec.reciprocal()
-
     double ss = ssVec.x + ssVec.y + ssVec.z + ssVec.w;
 
     // tail (if n not multiple of 4)
@@ -334,49 +329,38 @@ class SmolLM2 implements TokenGenerator {
       ss += v * v;
     }
 
-    ss = 1.0 / math.sqrt(ss / n + eps);
+    final scale = 1.0 / math.sqrt((ss / n) + eps);
 
-    final scale = ss;
     final scaleVec = Float32x4.splat(scale);
-
-    final n4w = n4;
 
     // -------------------------
     // normalize (SIMD)
     // -------------------------
-    for (int i = 0; i < n4w; i++) {
+    for (int i = 0; i < n4; i++) {
       outListX4[i] = xListX4[i] * scaleVec * wList4[i];
     }
 
     // -------------------------
     // tail (scalar)
     // -------------------------
-    for (int i = n4w << 2; i < n; i++) {
+    for (int i = n4 << 2; i < n; i++) {
       outList[i] = xList[i] * scale * wList[i];
     }
   }
 
-  void applyRope(
-    Float32List v,
-    int vOffset,
-    int hd,
-    Float32List ropeCos,
-    Float32List ropeSin,
-    int ropeOffset,
-  ) {
-    final h = hd ~/ 2;
+  void applyRope(Float32List v, int offset, int hd, int pos) {
+    final half = hd ~/ 2;
+    final base = pos * hd;
 
-    for (int i = 0; i < h; i++) {
-      final v0 = v[vOffset + i];
-      final v1 = v[vOffset + i + h];
+    for (int i = 0; i < half; i++) {
+      final v0 = v[offset + i];
+      final v1 = v[offset + i + half];
 
-      final c0 = ropeCos[ropeOffset + i];
-      final s0 = ropeSin[ropeOffset + i];
-      final c1 = ropeCos[ropeOffset + i + h];
-      final s1 = ropeSin[ropeOffset + i + h];
+      final c = ropeCos[base + i];
+      final s = ropeSin[base + i];
 
-      v[vOffset + i] = (v0 * c0 - v1 * s0).toDouble();
-      v[vOffset + i + h] = (v1 * c1 + v0 * s1).toDouble();
+      v[offset + i] = v0 * c - v1 * s;
+      v[offset + i + half] = v1 * c + v0 * s;
     }
   }
 
@@ -587,115 +571,14 @@ class SmolLM2 implements TokenGenerator {
     }
   }
 
+  late final _tokenizerEngine = TokenizerEngine(tokenizer);
+
   List<int> tokenize(String text, int max) {
-    final t = tokenizer;
-
-    final enc = StringBuffer();
-    var start = true;
-
-    for (final rune in text.runes) {
-      final ch = String.fromCharCode(rune);
-
-      if (ch == ' ') {
-        if (!start) {
-          enc.write('\u0120');
-        }
-      } else if (ch == '\n') {
-        enc.write('\u010A');
-        start = true;
-        continue;
-      } else {
-        enc.write(ch);
-        start = false;
-      }
-    }
-
-    final encoded = enc.toString();
-    final toks = <int>[];
-
-    int p = 0;
-
-    while (p < encoded.length && toks.length < max) {
-      int bestLen = 0;
-      int bestId = -1;
-
-      for (int len = 1; len <= 32 && p + len <= encoded.length; len++) {
-        final sub = encoded.substring(p, p + len);
-        final id = t.findTok(sub);
-
-        if (id >= 0) {
-          bestLen = len;
-          bestId = id;
-        }
-      }
-
-      if (bestId >= 0) {
-        toks.add(bestId);
-        p += bestLen;
-      } else {
-        final id = t.findTok(encoded[p]);
-        if (id >= 0) {
-          toks.add(id);
-        }
-        p++;
-      }
-    }
-
-    bool changed = true;
-    int iter = 0;
-
-    while (changed && toks.length > 1 && iter < 1000) {
-      changed = false;
-      iter++;
-
-      for (final merge in t.mergePairs) {
-        for (int j = 0; j < toks.length - 1; j++) {
-          final t1 = t.vocab[toks[j]];
-          final t2 = t.vocab[toks[j + 1]];
-
-          if (t1 == merge.a && t2 == merge.b) {
-            final merged = t1 + t2;
-            final mid = t.findTok(merged);
-
-            if (mid >= 0) {
-              toks[j] = mid;
-              toks.removeAt(j + 1);
-              changed = true;
-              break;
-            }
-          }
-        }
-
-        if (changed) {
-          break;
-        }
-      }
-    }
-
-    return toks;
+    return _tokenizerEngine.tokenize(text, max);
   }
 
   String decode(int tok) {
-    if (tok < 0 || tok >= tokenizer.vocabSize) {
-      return '';
-    }
-
-    final raw = tokenizer.vocab[tok];
-    final out = StringBuffer();
-
-    for (int i = 0; i < raw.length; i++) {
-      final ch = raw[i];
-
-      if (ch == '\u0120') {
-        out.write(' ');
-      } else if (ch == '\u010A') {
-        out.write('\n');
-      } else {
-        out.write(ch);
-      }
-    }
-
-    return out.toString();
+    return _tokenizerEngine.decode(tok);
   }
 
   int sample(
@@ -703,50 +586,72 @@ class SmolLM2 implements TokenGenerator {
     double temperature,
     double repeatPenalty,
     Map<int, int> seen,
-    math.Random rand,
-  ) {
+    math.Random rand, {
+    bool eager = false,
+  }) {
     final logits = this.logits;
 
-    // Apply repeat penalty:
-    for (int i = 0; i < vocab; i++) {
-      final count = seen[i] ?? 0;
-      if (count > 0) {
-        final factor = math.pow(repeatPenalty, count).toDouble();
-        if (logits[i] > 0) {
-          logits[i] /= factor;
-        } else {
-          logits[i] *= factor;
+    // Apply repetition penalty (if enabled):
+    // - skips work when repeatPenalty == 1.0 (no effect)
+    // - penalizes tokens based on how many times they were seen
+    // - stronger repetition => stronger penalty (exponential scaling)
+    // - reduces likelihood of repeated tokens in sampling
+    if (repeatPenalty != 1.0) {
+      for (int i = 0; i < vocab; i++) {
+        final count = seen[i] ?? 0;
+
+        if (count > 0) {
+          final factor = math.pow(repeatPenalty, count).toDouble();
+          final logit = logits[i];
+
+          logits[i] = logit > 0
+              ?
+                // If token is currently likely, reduce its score
+                // so repeated tokens become less probable
+                logit / factor
+              :
+                // If token is already unlikely, make it even less likely
+                // by increasing its magnitude in the negative direction
+                logit * factor;
         }
       }
     }
 
-    if (temperature <= 0) {
+    // Greedy / deterministic mode:
+    if (eager || temperature <= 0.0) {
       int best = 0;
+
       for (int i = 1; i < vocab; i++) {
         if (logits[i] > logits[best]) {
           best = i;
         }
       }
+
       return best;
     }
-
-    for (int i = 0; i < vocab; i++) {
-      logits[i] /= temperature;
-    }
-
-    softmax(logits, vocab);
-
-    final r = rand.nextDouble();
-    double acc = 0.0;
-
-    for (int i = 0; i < vocab; i++) {
-      acc += logits[i];
-      if (acc >= r) {
-        return i;
+    // Stochastic sampling mode:
+    // - converts logits into a probability distribution (softmax)
+    // - samples a token using cumulative probability (roulette wheel)
+    else {
+      // Applies temperature scaling:
+      for (int i = 0; i < vocab; i++) {
+        logits[i] /= temperature;
       }
-    }
 
-    return vocab - 1;
+      softmax(logits, vocab);
+
+      final r = rand.nextDouble();
+      double acc = 0.0;
+
+      for (int i = 0; i < vocab; i++) {
+        acc += logits[i];
+        if (acc >= r) {
+          return i;
+        }
+      }
+
+      return vocab - 1;
+    }
   }
 
   static final _randomSecure = math.Random.secure();

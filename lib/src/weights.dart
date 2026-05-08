@@ -237,6 +237,7 @@ class ModelWeights {
     double jitterScale = Q16Tensor.defaultQ16DequantizationJitterScale,
   }) {
     final q16 = Q16Tensor.readFrom(br, rows, cols);
+    //final q16 = Q16PerBlockTensor.readFrom(br, rows, cols);
 
     if (fp32) {
       return q16.toFP32Tensor(

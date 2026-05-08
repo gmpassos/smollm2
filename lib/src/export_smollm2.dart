@@ -60,14 +60,16 @@ class HFConfig {
 class HFTokenizer {
   final List<String> vocab;
   final List<(String, String)> merges;
+  final Map<String, int> addedTokens;
 
-  HFTokenizer(this.vocab, this.merges);
+  HFTokenizer(this.vocab, this.merges, this.addedTokens);
 
   static Future<HFTokenizer> load(String path) async {
     final jsonMap = jsonDecode(await File(path).readAsString());
     final model = jsonMap['model'] as Map<String, dynamic>;
     final vocabMap = model['vocab'] as Map<String, dynamic>;
     final mergesGeneric = (model['merges'] as List);
+    final addedTokensList = (jsonMap['added_tokens'] ?? []) as List;
 
     final List<(String, String)> merges = mergesGeneric.map((e) {
       if (e is List) {
@@ -102,7 +104,19 @@ class HFTokenizer {
       vocab[e.value as int] = e.key;
     }
 
-    return HFTokenizer(vocab, merges);
+    final Map<String, int> addedTokens = {};
+    for (final e in addedTokensList) {
+      if (e is Map<String, dynamic>) {
+        final content = e['content']?.toString();
+        final id = e['id'];
+
+        if (content != null && id is int) {
+          addedTokens[content] = id;
+        }
+      }
+    }
+
+    return HFTokenizer(vocab, merges, addedTokens);
   }
 }
 
@@ -932,13 +946,24 @@ class SmolLM2Exporter {
     w.writeU32(tokenizer.vocab.length);
     w.writeU32(tokenizer.merges.length);
 
+    // --- vocab ---
     for (final v in tokenizer.vocab) {
       w.writeString(v);
     }
 
+    // --- merges ---
     for (final m in tokenizer.merges) {
       w.writeString(m.$1);
       w.writeString(m.$2);
+    }
+
+    // --- added/special tokens ---
+    final added = tokenizer.addedTokens;
+
+    w.writeU32(added.length);
+    for (final e in added.entries) {
+      w.writeString(e.key); // token text
+      w.writeU32(e.value); // token id
     }
   }
 
