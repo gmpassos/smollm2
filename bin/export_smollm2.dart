@@ -14,9 +14,11 @@ Future<void> main(List<String> args) async {
     if (arg == '-Q8') {
       quantType = QuantType.q8;
       continue;
-    }
-    if (arg == '-Q16') {
+    } else if (arg == '-Q16') {
       quantType = QuantType.q16;
+      continue;
+    } else if (arg == '-BF16') {
+      quantType = QuantType.bf16;
       continue;
     }
     filteredArgs.add(arg);
