@@ -1,5 +1,7 @@
 import 'data.dart';
 
+typedef AddedTokenInfo = ({int id, bool special});
+
 class Tokenizer {
   final int vocabSize;
   final int numMerges;
@@ -7,18 +9,31 @@ class Tokenizer {
 
   final List<String> vocab;
   final List<(String, String)> merges;
-  final Map<String, int> addedTokens;
+  final Map<String, AddedTokenInfo> addedTokens;
+  final Map<int, String> specialTokens;
 
   final Map<String, int> vocabMap = {};
   final Map<(String, String), int> mergeRank = {};
+
+  /// Default End-Of-Sequence (EOS) token ID.
+  static const defaultEOSTokenIDs = [0, 2];
+
+  /// Token IDs that signals end of generation.
+  final List<int> eosTokenIDs;
 
   Tokenizer({
     required this.vocab,
     required this.merges,
     required this.addedTokens,
+    this.eosTokenIDs = defaultEOSTokenIDs,
   }) : vocabSize = vocab.length,
        numMerges = merges.length,
-       addedSize = addedTokens.length {
+       addedSize = addedTokens.length,
+       specialTokens = Map.fromEntries(
+         addedTokens.entries
+             .where((e) => e.value.special)
+             .map((e) => MapEntry(e.value.id, e.key)),
+       ) {
     _buildVocabMap();
     _buildMergeRank();
   }
@@ -37,12 +52,13 @@ class Tokenizer {
 
     // --- NEW: added tokens ---
     final addedCount = dataReader.readU32();
-    final addedTokens = <String, int>{};
+    final addedTokens = <String, AddedTokenInfo>{};
 
     for (int i = 0; i < addedCount; i++) {
       final text = dataReader.readString();
       final id = dataReader.readU32();
-      addedTokens[text] = id;
+      final special = dataReader.readU8() == 1;
+      addedTokens[text] = (id: id, special: special);
     }
 
     final t = Tokenizer(vocab: vocab, merges: merges, addedTokens: addedTokens);
@@ -64,9 +80,13 @@ class Tokenizer {
 
   int findTok(String s) => vocabMap[s] ?? -1;
 
+  bool isSpecialTok(int id) => specialTokens.containsKey(id);
+
+  bool isEOSTok(int id) => eosTokenIDs.contains(id);
+
   @override
   String toString() =>
-      'Tokenizer{vocabSize: $vocabSize, numMerges: $numMerges}';
+      'Tokenizer{vocabSize: $vocabSize, numMerges: $numMerges, eosTokenIDs: $eosTokenIDs}';
 }
 
 class TokenizerEngine {
@@ -93,7 +113,7 @@ class TokenizerEngine {
 
         if (i + sp.length <= text.length && text.startsWith(sp, i)) {
           if (sp.length > matchedLen) {
-            matchedId = entry.value;
+            matchedId = entry.value.id;
             matchedLen = sp.length;
           }
         }

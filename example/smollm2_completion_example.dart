@@ -39,12 +39,12 @@ Future<void> main(List<String> args) async {
 
 // OUTPUT:
 /*
-»» Loading model: models/smollm2-360m-instruct/smollm2-bf16.bin (725094812 bytes) ...
-»» Loaded (1.044ms): Config{quantType: QuantType.bf16, groupSize: 0, hiddenSize: 960, intermediateSize: 2560, numLayers: 32, numHeads: 15, numKvHeads: 5, vocabSize: 49152, maxSeqLen: 8192, headDim: 64}
-»» Loaded (1.124s): Tokenizer{vocabSize: 49152, numMerges: 48900}
+»» Loading model: models/smollm2-360m-instruct/smollm2-bf16.bin (725094829 bytes) ...
+»» Loaded (893µs): Config{quantType: QuantType.bf16, groupSize: 0, hiddenSize: 960, intermediateSize: 2560, numLayers: 32, numHeads: 15, numKvHeads: 5, vocabSize: 49152, maxSeqLen: 8192, headDim: 64}
+»» Loaded (797.989ms): Tokenizer{vocabSize: 49152, numMerges: 48900, eosTokenIDs: [0, 2]}
 »» Loading weights...
-»» Loaded (15.265s): ModelWeights{embedTokens: FP32Tensor{size: 47185920, rows: 49152 cols: 960, data: 47185920}, layers: 32, finalNorm: FP32Tensor{size: 960, rows: 1 cols: 960, data: 960}}
-»» Model fully loaded 🚀 (16.455s)
+»» Loaded (6.870s): ModelWeights{embedTokens: FP32Tensor{size: 47185920, rows: 49152 cols: 960, data: 47185920}, layers: 32, finalNorm: FP32Tensor{size: 960, rows: 1 cols: 960, data: 960}}
+»» Model fully loaded 🚀 (7.719s)
 ---------------------------------------------------
 
 <<<
@@ -56,6 +56,6 @@ Paris has a rich history and culture, including the Eiffel Tower, Louvre Museum,
 <<<
 The capital of France is Paris.
 Paris is the largest city in France.
-Paris has a rich history and culture, including the Eiffel Tower, Louvre Museum, and Notre-Dame Cathedral.
+Paris has a rich history and culture, including the Eiffel Tower, Louvre Museum, and Notre-Dame Cathedral.<|im_end|>
 >>>
 */

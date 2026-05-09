@@ -103,22 +103,31 @@ class ChatSession {
   void addAssistant(String text) =>
       _messages.add(ChatMessage(ChatRole.assistant, text));
 
-  /// Builds a formatted prompt string from the stored chat messages.
+  /// Builds a chat-formatted prompt from the stored message history.
   ///
-  /// The output follows a structured chat template using [imStart] and [imEnd]
-  /// tokens to delimit each message:
+  /// The output follows a structured template compatible with
+  /// ChatML-style models, using [imStart] and [imEnd] tokens
+  /// to delimit each message block.
+  ///
+  /// Each message is formatted as:
   ///
   /// ```text
   /// <|im_start|>role
-  /// content<|im_end|>
+  /// content
+  /// <|im_end|>
   /// ```
   ///
-  /// After all messages, an opening assistant tag is appended to signal where
-  /// the model should continue generation.
+  /// After all messages, an optional assistant prefix is appended:
   ///
-  /// The [offset] parameter allows skipping older messages, which is useful
-  /// for sliding window or truncated context strategies.
-  String buildPrompt({int offset = 0}) {
+  /// ```text
+  /// <|im_start|>assistant
+  /// ```
+  ///
+  /// This signals the model to continue generation from the assistant role.
+  ///
+  /// The [offset] parameter allows skipping older messages, enabling
+  /// sliding-window or truncated-context strategies for long conversations.
+  String buildPrompt({int offset = 0, bool appendImStartAssistant = true}) {
     final sb = StringBuffer();
 
     for (var i = offset; i < _messages.length; ++i) {
@@ -128,7 +137,9 @@ class ChatSession {
       sb.write('$imEnd\n');
     }
 
-    sb.write('${imStart}assistant\n');
+    if (appendImStartAssistant) {
+      sb.write('${imStart}assistant\n');
+    }
 
     return sb.toString();
   }

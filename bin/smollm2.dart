@@ -197,6 +197,49 @@ String _c(String text, String color, bool enabled) {
   return '$color$text$_reset';
 }
 
+enum SpinnerStyle {
+  ascii(['|', '/', '-', '\\']),
+  braille(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']),
+  dots(['⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽', '⣾']),
+  circle(['◐', '◓', '◑', '◒']),
+  bars(['▁', '▃', '▄', '▅', '▆', '▇', '█', '▇', '▆', '▅', '▄', '▃']),
+  blocks(['▖', '▘', '▝', '▗']),
+  arrows(['←', '↖', '↑', '↗', '→', '↘', '↓', '↙']),
+  dotsWave(['⠋', '⠙', '⠚', '⠞', '⠖', '⠦', '⠴', '⠲', '⠳', '⠓']);
+
+  final List<String> frames;
+
+  const SpinnerStyle(this.frames);
+}
+
+class TokenSpinner {
+  final SpinnerStyle style;
+  final String message;
+
+  TokenSpinner(this.message, {this.style = SpinnerStyle.dots});
+
+  int _i = 0;
+
+  bool _active = false;
+
+  void start() {
+    _active = true;
+    stdout.write(message);
+  }
+
+  void tick() {
+    if (!_active) return;
+
+    final frame = style.frames[_i++ % style.frames.length];
+    stdout.write('\r$message $frame');
+  }
+
+  void stop([String? finalMessage]) {
+    _active = false;
+    stdout.write('\r\x1B[K${finalMessage ?? message}\n');
+  }
+}
+
 Future<void> _chatSession(
   SmolLM2 smollm,
   int maxTokens,
@@ -221,13 +264,45 @@ Future<void> _chatSession(
 
   final chat = ChatSession(seed: seed);
 
-  chat.addSystem('You are a helpful AI assistant.');
+  chat.addSystem(
+    'You are a helpful AI assistant named SmolLM, trained by Hugging Face',
+  );
 
   hr();
   print(_c('Chat mode enabled. Type "exit" to quit.', systemColor, colored));
   hr();
 
   var messagesOffset = 0;
+
+  var systemPrompt = chat.buildPrompt(
+    offset: messagesOffset,
+    appendImStartAssistant: false,
+  );
+
+  print('');
+
+  TokenSpinner? spinner;
+  if (colored) {
+    spinner = TokenSpinner(
+      _c('» Loading system prompt...', systemColor, colored),
+    );
+    spinner.start();
+  } else {
+    print('» Loading system prompt...');
+  }
+
+  smollm.ingest(
+    systemPrompt,
+    onTokenEmitted: (int t, String s, TokenOrigin o) {
+      spinner?.tick();
+    },
+  );
+
+  if (colored) {
+    spinner!.stop(_c('» System prompt loaded', systemColor, colored));
+  }
+
+  ++messagesOffset;
 
   while (true) {
     stdout.write(_c('\nYou › ', labelColor, colored));
@@ -260,10 +335,23 @@ Future<void> _chatSession(
       onTokenEmitted: onTokenEmitted,
     );
 
-    var assistantResponse = result.output;
-    if (!chat.endsWithImEndToken(assistantResponse)) {
-      await smollm.ingest('${chat.imEnd}\n');
+    var generatedTokens = result.generatedTokens;
+    if (generatedTokens.isNotEmpty) {
+      switch (result.stopReason) {
+        case TokenGenerationStopReason.eosToken:
+          {
+            assert(smollm.tokenizer.isEOSTok(generatedTokens.last));
+            smollm.ingest('\n', emmitPromptTokens: false);
+          }
+        case TokenGenerationStopReason.maxTokensReached:
+          {
+            assert(!smollm.tokenizer.isEOSTok(generatedTokens.last));
+            smollm.ingest('${chat.imEnd}\n', emmitPromptTokens: false);
+          }
+      }
     }
+
+    var assistantResponse = result.output;
 
     chat.addAssistant(assistantResponse);
 

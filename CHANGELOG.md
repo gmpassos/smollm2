@@ -1,3 +1,39 @@
+## 1.0.7
+
+- Added `LLMTokenGenerator` class implementing token generation backed by `LLMRuntime`.
+- Refactored `SmolLM2` to extend `LLMTokenGenerator` and delegate runtime logic.
+- `runtime.dart`:
+  - Added `LLMRuntime` class handling model loading, inference, KV cache, and sampling.
+  - Supports BF16, Q8, Q16 quantized models with optional jitter during dequantization.
+  - Implements transformer forward pass, RMS normalization, RoPE, attention, MLP, and sampling.
+- `token_generator.dart`:
+  - Updated `TokenGenerationResult` to store prompt and generated tokens as lists of token IDs.
+  - Added getters for token counts and updated `toString` formatting.
+- `tokenizer.dart`:
+  - Added support for special tokens with `AddedTokenInfo` including `special` flag.
+  - Added `isSpecialTok` and `isEOSTok` methods.
+  - Updated tokenizer loading and token matching to handle special tokens.
+- `export_smollm2.dart`:
+  - Exporter now writes added tokens with `special` flag.
+- `bin/smollm2.dart`:
+  - Added `SpinnerStyle` enum and `TokenSpinner` class for spinner UI during prompt loading.
+  - Updated `_chatSession` to ingest system prompt with spinner and improved chat prompt building.
+  - Improved assistant response handling based on generation stop reason.
+- `example/smollm2_chat_example.dart`:
+  - Added system prompt ingestion before chat loop.
+  - Updated assistant response handling with stop reason logic.
+- `example/smollm2_completion_example.dart` and `example/smollm2_rs_in_strawberry_example.dart`:
+  - Updated to use new `TokenGenerationResult` output and ingest system prompt before generation.
+- `lib/src/chat.dart`:
+  - Improved `ChatSession.buildPrompt` to optionally append assistant start token.
+  - Clarified chat prompt format with ChatML-style tokens.
+- `lib/src/data.dart`:
+  - Added `readU8` and `writeU8` methods for byte-level I/O.
+- `test/smollm2_vocab.dart`:
+  - Updated added tokens map to include `special` flag for each token.
+- `test/tokenizer_test.dart`:
+  - Added tests verifying special token recognition and EOS token detection in tokenized output.
+
 ## 1.0.6
 
 - `bin/smollm2.dart`:

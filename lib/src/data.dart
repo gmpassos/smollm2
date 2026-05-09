@@ -9,10 +9,20 @@ class DataReader {
   DataReader(this.file);
 
   int _readCount = 0;
+
   int get readCount => _readCount;
 
   final _byteData = ByteData(4);
   late final _byteDataBytes = _byteData.buffer.asUint8List();
+
+  int readU8() {
+    var r = file.readIntoSync(_byteDataBytes, 0, 1);
+    if (r != 1) {
+      throw Exception('Unexpected EOF');
+    }
+    _readCount += 1;
+    return _byteData.getUint8(0);
+  }
 
   int readU16() {
     var r = file.readIntoSync(_byteDataBytes, 0, 2);
@@ -65,8 +75,17 @@ class DataWriter {
 
   int get writeCount => _writeCount;
 
+  final _byteData1 = ByteData(1);
   final _byteData2 = ByteData(2);
   final _byteData4 = ByteData(4);
+
+  Future<void> writeU8(int v) async {
+    final byteData = _byteData1;
+    byteData.setUint8(0, v);
+    var bs = Uint8List.fromList(byteData.buffer.asUint8List());
+    sink.add(bs);
+    _writeCount += 1;
+  }
 
   Future<void> writeU16(int v) async {
     final byteData = _byteData2;
