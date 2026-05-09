@@ -57,10 +57,12 @@ class HFConfig {
 
 /* ---------------- Tokenizer ---------------- */
 
+typedef HFAddedTokenInfo = ({int id, bool special});
+
 class HFTokenizer {
   final List<String> vocab;
   final List<(String, String)> merges;
-  final Map<String, int> addedTokens;
+  final Map<String, HFAddedTokenInfo> addedTokens;
 
   HFTokenizer(this.vocab, this.merges, this.addedTokens);
 
@@ -104,14 +106,16 @@ class HFTokenizer {
       vocab[e.value as int] = e.key;
     }
 
-    final Map<String, int> addedTokens = {};
+    final Map<String, HFAddedTokenInfo> addedTokens = {};
     for (final e in addedTokensList) {
       if (e is Map<String, dynamic>) {
         final content = e['content']?.toString();
         final id = e['id'];
+        final specialVal = e['special'];
 
         if (content != null && id is int) {
-          addedTokens[content] = id;
+          var special = specialVal is bool ? specialVal : false;
+          addedTokens[content] = (id: id, special: special);
         }
       }
     }
@@ -963,7 +967,8 @@ class SmolLM2Exporter {
     w.writeU32(added.length);
     for (final e in added.entries) {
       w.writeString(e.key); // token text
-      w.writeU32(e.value); // token id
+      w.writeU32(e.value.id); // token id
+      w.writeU8(e.value.special ? 1 : 0); // token special
     }
   }
 

@@ -121,6 +121,21 @@ Hello Alice.<|im_end|>
 
       expect(result.isNotEmpty, true);
 
+      // <|im_start|>
+      var imStart = result[0];
+      expect(t.isSpecialTok(imStart), isTrue);
+
+      expect(t.isSpecialTok(result[1]), isFalse);
+
+      // <|im_end|>
+      var imEnd = result[result.length - 2];
+      expect(t.isSpecialTok(imEnd), isTrue);
+      expect(t.isEOSTok(imEnd), isTrue);
+
+      var preImEnd = result[result.length - 3];
+      expect(t.isSpecialTok(preImEnd), isFalse);
+      expect(t.isEOSTok(preImEnd), isFalse);
+
       final decoded = result.map((id) => engine.decode(id)).toList();
       print(json.encode(decoded));
 

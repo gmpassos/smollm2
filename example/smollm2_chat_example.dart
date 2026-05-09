@@ -7,15 +7,26 @@ Future<void> main() async {
   await smollm.load('models/smollm2-360m-instruct/smollm2-bf16.bin');
 
   final chat = ChatSession(seed: 12345);
-  chat.addSystem('You are a helpful assistant.');
 
   var messagesOffset = 0;
+
+  chat.addSystem('You are a helpful assistant.');
+
+  print('Loading system prompt...');
+  var systemPrompt = chat.buildPrompt(
+    offset: messagesOffset,
+    appendImStartAssistant: false,
+  );
+
+  smollm.ingest(systemPrompt);
+
+  ++messagesOffset;
 
   void onTokenEmitted(int t, String s, TokenOrigin o) {
     stdout.write(s);
   }
 
-  print('[Chat ready. Type "exit" to quit]');
+  print('\n[Chat ready. Type "exit" to quit]');
 
   while (true) {
     stdout.write('\nYou › ');
@@ -43,8 +54,15 @@ Future<void> main() async {
     final assistantText = result.output;
     chat.addAssistant(assistantText);
 
-    if (!chat.endsWithImEndToken(assistantText)) {
-      await smollm.ingest('${chat.imEnd}\n');
+    switch (result.stopReason) {
+      case TokenGenerationStopReason.eosToken:
+        {
+          smollm.ingest('\n', emmitPromptTokens: false);
+        }
+      case TokenGenerationStopReason.maxTokensReached:
+        {
+          smollm.ingest('${chat.imEnd}\n', emmitPromptTokens: false);
+        }
     }
 
     messagesOffset = chat.length;
@@ -59,6 +77,8 @@ Future<void> main() async {
 
 // OUTPUT:
 /*
+Loading system prompt...
+
 [Chat ready. Type "exit" to quit]
 
 You › Hello!

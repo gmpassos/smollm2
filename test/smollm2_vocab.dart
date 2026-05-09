@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:smollm2/smollm2.dart';
+
 /// SmolLM2 Vocabulary encoded as: JSON → UTF-8 → GZIP → Base64.
 ///
 /// The original vocabulary is a JSON list of strings, compressed using GZIP
@@ -100,22 +102,29 @@ List<(String, String)> _decodeMerges(String b64) {
   return merges;
 }
 
-final smolLM2TokenizerAddedTokens = {
-  "<|endoftext|>": 0,
-  "<|im_start|>": 1,
-  "<|im_end|>": 2,
-  "<repo_name>": 3,
-  "<reponame>": 4,
-  "<file_sep>": 5,
-  "<filename>": 6,
-  "<gh_stars>": 7,
-  "<issue_start>": 8,
-  "<issue_comment>": 9,
-  "<issue_closed>": 10,
-  "<jupyter_start>": 11,
-  "<jupyter_text>": 12,
-  "<jupyter_code>": 13,
-  "<jupyter_output>": 14,
-  "<jupyter_script>": 15,
-  "<empty_output>": 16,
+final smolLM2TokenizerAddedTokens = <String, AddedTokenInfo>{
+  "<|endoftext|>": (id: 0, special: true),
+
+  "<|im_start|>": (id: 1, special: true),
+  "<|im_end|>": (id: 2, special: true),
+
+  "<repo_name>": (id: 3, special: true),
+  "<reponame>": (id: 4, special: true),
+
+  "<file_sep>": (id: 5, special: true),
+  "<filename>": (id: 6, special: true),
+
+  "<gh_stars>": (id: 7, special: true),
+
+  "<issue_start>": (id: 8, special: true),
+  "<issue_comment>": (id: 9, special: true),
+  "<issue_closed>": (id: 10, special: true),
+
+  "<jupyter_start>": (id: 11, special: true),
+  "<jupyter_text>": (id: 12, special: true),
+  "<jupyter_code>": (id: 13, special: true),
+  "<jupyter_output>": (id: 14, special: true),
+  "<jupyter_script>": (id: 15, special: true),
+
+  "<empty_output>": (id: 16, special: true),
 };
