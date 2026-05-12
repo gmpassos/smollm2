@@ -123,14 +123,6 @@ class DataWriter {
   Future<void> flush() => sink.flush();
 }
 
-typedef Float32ListX4 = ({Float32List list, Float32x4List listX4});
-
-extension Float32ListExtension on Float32List {
-  Float32x4List get asFloat32x4List => buffer.asFloat32x4List();
-
-  Float32ListX4 get asFloat32ListX4 => (list: this, listX4: asFloat32x4List);
-}
-
 extension ListIntExtension on List<int> {
   int hashListInt() {
     final data = this;

@@ -1,6 +1,6 @@
 name: smollm2
 description: Pure Dart inference engine for SmolLM2 language models, delivering surprisingly capable local LLM results without requiring CUDA.
-version: 1.0.7
+version: 1.0.8
 repository: https://github.com/gmpassos/smollm2
 
 environment:
@@ -12,6 +12,7 @@ executables:
 
 dependencies:
   collection: ^1.19.1
+  ffi: ^2.2.0
 
 dev_dependencies:
   lints: ^6.1.0
