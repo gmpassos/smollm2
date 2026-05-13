@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../../native_tensor.dart';
+import 'fp32_cuda_tensor.dart';
 
 class CudaLibrary extends NativeLibrary<CudaBinding> {
   static final instance = CudaLibrary._();
@@ -16,11 +17,15 @@ class CudaLibrary extends NativeLibrary<CudaBinding> {
 
   @override
   File? tryResolveLibraryFile() {
-    return File(r'C:\Users\a7\llama\gh-tmp\smollm2\native\windows\cuda\build\cuda_backend.dll');
+    return File(
+      r'C:\Users\a7\llama\gh-tmp\smollm2\native\windows\cuda\build\cuda_backend.dll',
+    );
   }
 
   @override
-  Set<NativeTensorReader> tensorReaders = const {};
+  Set<NativeTensorReader> tensorReaders = Set.unmodifiable([
+    FP32CudaTensorReader(),
+  ]);
 
   @override
   CudaBinding create() {
