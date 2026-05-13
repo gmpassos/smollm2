@@ -488,36 +488,9 @@ class LLMRuntime {
 
   void _computeLogits(Float32List xArray, Float32x4List xArrayX4) {
     final c = config;
-    final w = weights;
-    final hs = c.hiddenSize;
-
-    final hsX4 = hs ~/ 4;
-    final tailStart = hsX4 * 4;
-
+    final embedTokens = weights.embedTokens;
     final logits = this.logits;
-
-    final emb = w.embedTokensArray.list;
-    final embX4 = w.embedTokensArray.listX4;
-    final zeroX4 = Float32x4.zero();
-
-    for (int i = 0; i < c.vocabSize; i++) {
-      final row = i * hs;
-      final rowX4 = i * hsX4;
-
-      var sumX4 = zeroX4;
-
-      for (int j = 0; j < hsX4; j++) {
-        sumX4 += xArrayX4[j] * embX4[rowX4 + j];
-      }
-
-      double sum = sumX4.x + sumX4.y + sumX4.z + sumX4.w;
-
-      for (int j = tailStart; j < hs; j++) {
-        sum += xArray[j] * emb[row + j];
-      }
-
-      logits[i] = sum;
-    }
+    embedTokens.computeLogits(x, logits, c.hiddenSize, c.vocabSize);
   }
 
   void _forwardLayer(int l, int pos, int nkv, int ng) {

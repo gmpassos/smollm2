@@ -20,51 +20,113 @@ final class MetalContext {
         return queue
     }()
 
-    static let sharedPipeline: MTLComputePipelineState = {
-        let source = """
-        #include <metal_stdlib>
-        using namespace metal;
+    static let metalSource = """
+    #include <metal_stdlib>
+    using namespace metal;
 
-        kernel void matmul(
-            const device float* weights [[buffer(0)]],
-            const device float* input   [[buffer(1)]],
-            device float* output        [[buffer(2)]],
-            constant uint& cols         [[buffer(3)]],
-            uint gid                    [[thread_position_in_grid]]
-        ) {
-            float sum = 0.0;
-            uint rowOffset = gid * cols;
+    kernel void matmul(
+        const device float* weights [[buffer(0)]],
+        const device float* input   [[buffer(1)]],
+        device float* output        [[buffer(2)]],
+        constant uint& cols         [[buffer(3)]],
+        uint gid                    [[thread_position_in_grid]]
+    ) {
+        float sum = 0.0;
+        uint rowOffset = gid * cols;
 
-            uint simdCols = cols / 4;
+        uint simdCols = cols / 4;
 
-            const device float4* weights4 =
-                reinterpret_cast<const device float4*>(weights + rowOffset);
+        const device float4* weights4 =
+            reinterpret_cast<const device float4*>(weights + rowOffset);
 
-            const device float4* input4 =
-                reinterpret_cast<const device float4*>(input);
+        const device float4* input4 =
+            reinterpret_cast<const device float4*>(input);
 
-            for (uint i = 0; i < simdCols; i++) {
-                sum += dot(weights4[i], input4[i]);
-            }
-
-            uint remainderStart = simdCols * 4;
-
-            for (uint i = remainderStart; i < cols; i++) {
-                sum += weights[rowOffset + i] * input[i];
-            }
-
-            output[gid] = sum;
+        for (uint i = 0; i < simdCols; i++) {
+            sum += dot(weights4[i], input4[i]);
         }
-        """
 
+        uint remainderStart = simdCols * 4;
+
+        for (uint i = remainderStart; i < cols; i++) {
+            sum += weights[rowOffset + i] * input[i];
+        }
+
+        output[gid] = sum;
+    }
+
+    kernel void compute_logits(
+        const device float* x         [[buffer(0)]],
+        const device float* embed     [[buffer(1)]],
+        device float* logits          [[buffer(2)]],
+        constant uint& hiddenSize     [[buffer(3)]],
+        uint gid                      [[thread_position_in_grid]]
+    ) {
+        float sum = 0.0;
+
+        uint rowOffset = gid * hiddenSize;
+
+        uint simdCols = hiddenSize / 4;
+
+        const device float4* x4 =
+            reinterpret_cast<const device float4*>(x);
+
+        const device float4* embed4 =
+            reinterpret_cast<const device float4*>(embed + rowOffset);
+
+        for (uint i = 0; i < simdCols; i++) {
+            sum += dot(x4[i], embed4[i]);
+        }
+
+        uint tailStart = simdCols * 4;
+
+        for (uint i = tailStart; i < hiddenSize; i++) {
+            sum += x[i] * embed[rowOffset + i];
+        }
+
+        logits[gid] = sum;
+    }
+    """
+
+    static let sharedPipeline: MTLComputePipelineState = {
         do {
-            let library = try sharedDevice.makeLibrary(source: source, options: nil)
+            let library = try sharedDevice.makeLibrary(
+                source: metalSource,
+                options: nil
+            )
+
             guard let function = library.makeFunction(name: "matmul") else {
                 fatalError("Failed to create function")
             }
-            return try sharedDevice.makeComputePipelineState(function: function)
+
+            return try sharedDevice.makeComputePipelineState(
+                function: function
+            )
+
         } catch {
-            fatalError("Pipeline error: \(error)")
+            fatalError("Pipeline error: \\(error)")
+        }
+    }()
+
+    static let sharedLogitsPipeline: MTLComputePipelineState = {
+        do {
+            let library = try sharedDevice.makeLibrary(
+                source: metalSource,
+                options: nil
+            )
+
+            guard let function = library.makeFunction(
+                name: "compute_logits"
+            ) else {
+                fatalError("Failed to create compute_logits")
+            }
+
+            return try sharedDevice.makeComputePipelineState(
+                function: function
+            )
+
+        } catch {
+            fatalError("Pipeline error: \\(error)")
         }
     }()
 }
@@ -76,11 +138,15 @@ final class MetalBackend {
     let device: MTLDevice
     let queue: MTLCommandQueue
     let pipeline: MTLComputePipelineState
+    let logitsPipeline: MTLComputePipelineState
 
     private var weightsBuffer: MTLBuffer?
     private var inputBuffer: MTLBuffer?
     private var outputBuffer: MTLBuffer?
     private var colsBuffer: MTLBuffer?
+
+    private var logitsBuffer: MTLBuffer?
+    private var hiddenSizeBuffer: MTLBuffer?
 
     // Store current dimensions
     private var bufferRows: Int = 0
@@ -92,6 +158,7 @@ final class MetalBackend {
         self.device = MetalContext.sharedDevice
         self.queue = MetalContext.sharedQueue
         self.pipeline = MetalContext.sharedPipeline
+        self.logitsPipeline = MetalContext.sharedLogitsPipeline
     }
 
     private func ensureBuffers(rows: Int, cols: Int) {
@@ -101,7 +168,9 @@ final class MetalBackend {
            weightsBuffer != nil &&
            inputBuffer != nil &&
            outputBuffer != nil &&
-           colsBuffer != nil {
+           colsBuffer != nil &&
+           logitsBuffer != nil &&
+           hiddenSizeBuffer != nil {
             return
         }
 
@@ -110,20 +179,51 @@ final class MetalBackend {
         let outputSize = rows * MemoryLayout<Float>.stride
         let colsSize = MemoryLayout<UInt32>.stride
 
+        let logitsSize = rows * MemoryLayout<Float>.stride
+        let hiddenSizeSize = MemoryLayout<UInt32>.stride
+
         if weightsBuffer == nil || weightsBuffer!.length < weightsSize {
-            weightsBuffer = device.makeBuffer(length: weightsSize, options: .storageModeShared)
+            weightsBuffer = device.makeBuffer(
+                length: weightsSize,
+                options: .storageModeShared
+            )
         }
 
         if inputBuffer == nil || inputBuffer!.length < inputSize {
-            inputBuffer = device.makeBuffer(length: inputSize, options: .storageModeShared)
+            inputBuffer = device.makeBuffer(
+                length: inputSize,
+                options: .storageModeShared
+            )
         }
 
         if outputBuffer == nil || outputBuffer!.length < outputSize {
-            outputBuffer = device.makeBuffer(length: outputSize, options: .storageModeShared)
+            outputBuffer = device.makeBuffer(
+                length: outputSize,
+                options: .storageModeShared
+            )
         }
 
         if colsBuffer == nil || colsBuffer!.length < colsSize {
-            colsBuffer = device.makeBuffer(length: colsSize, options: .storageModeShared)
+            colsBuffer = device.makeBuffer(
+                length: colsSize,
+                options: .storageModeShared
+            )
+        }
+
+        if logitsBuffer == nil || logitsBuffer!.length < logitsSize {
+            logitsBuffer = device.makeBuffer(
+                length: logitsSize,
+                options: .storageModeShared
+            )
+        }
+
+        if hiddenSizeBuffer == nil ||
+            hiddenSizeBuffer!.length < hiddenSizeSize {
+
+            hiddenSizeBuffer = device.makeBuffer(
+                length: hiddenSizeSize,
+                options: .storageModeShared
+            )
         }
 
         // Save allocated capacity
@@ -137,7 +237,11 @@ final class MetalBackend {
         ensureBuffers(rows: rows, cols: cols)
 
         let size = rows * cols * MemoryLayout<Float>.stride
-        weightsBuffer!.contents().copyMemory(from: weights, byteCount: size)
+
+        weightsBuffer!.contents().copyMemory(
+            from: weights,
+            byteCount: size
+        )
 
         weightsLoaded = true
     }
@@ -200,7 +304,6 @@ final class MetalBackend {
         memcpy(dst2, src, copyBytes)
     }
 
-
     func copyOutput(
         to dst: UnsafeMutablePointer<Float>,
         dstStart: Int,
@@ -258,10 +361,12 @@ final class MetalBackend {
 
     // MARK: - MATMUL
 
-    func matmul(input: UnsafePointer<Float>,
-                output: UnsafeMutablePointer<Float>,
-                rows: Int,
-                cols: Int) {
+    func matmul(
+        input: UnsafePointer<Float>,
+        output: UnsafeMutablePointer<Float>,
+        rows: Int,
+        cols: Int
+    ) {
         precondition(weightsLoaded, "Call setWeights before matmul")
         precondition(rows > 0 && cols > 0, "Invalid rows/cols")
 
@@ -274,10 +379,17 @@ final class MetalBackend {
 
         let inputSize = cols * MemoryLayout<Float>.stride
 
-        inputBuffer.contents().copyMemory(from: input, byteCount: inputSize)
+        inputBuffer.contents().copyMemory(
+            from: input,
+            byteCount: inputSize
+        )
 
         var colsValue = UInt32(cols)
-        colsBuffer.contents().copyMemory(from: &colsValue, byteCount: MemoryLayout<UInt32>.stride)
+
+        colsBuffer.contents().copyMemory(
+            from: &colsValue,
+            byteCount: MemoryLayout<UInt32>.stride
+        )
 
         guard let commandBuffer = queue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder()
@@ -294,7 +406,11 @@ final class MetalBackend {
 
         encoder.dispatchThreads(
             MTLSize(width: rows, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1)
+            threadsPerThreadgroup: MTLSize(
+                width: tgWidth,
+                height: 1,
+                depth: 1
+            )
         )
 
         encoder.endEncoding()
@@ -303,9 +419,12 @@ final class MetalBackend {
 
         // GPU → CPU copy
         let outputSize = rows * MemoryLayout<Float>.stride
-        memcpy(output,
-               outputBuffer.contents(),
-               outputSize)
+
+        memcpy(
+            output,
+            outputBuffer.contents(),
+            outputSize
+        )
     }
 
     func matmulInputMLTBuffer(
@@ -328,6 +447,7 @@ final class MetalBackend {
 
         // upload cols
         var colsValue = UInt32(cols)
+
         colsBuffer.contents().copyMemory(
             from: &colsValue,
             byteCount: MemoryLayout<UInt32>.stride
@@ -345,7 +465,11 @@ final class MetalBackend {
 
         encoder.dispatchThreads(
             MTLSize(width: rows, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1)
+            threadsPerThreadgroup: MTLSize(
+                width: tgWidth,
+                height: 1,
+                depth: 1
+            )
         )
 
         encoder.endEncoding()
@@ -354,9 +478,12 @@ final class MetalBackend {
 
         // GPU → CPU copy
         let outputSize = rows * MemoryLayout<Float>.stride
-        memcpy(output,
-               outputBuffer.contents(),
-               outputSize)
+
+        memcpy(
+            output,
+            outputBuffer.contents(),
+            outputSize
+        )
     }
 
     func matmulOutputMLTBuffer(
@@ -379,10 +506,15 @@ final class MetalBackend {
 
         // CPU → GPU (input copy)
         let inputSize = cols * MemoryLayout<Float>.stride
-        inputBuffer.contents().copyMemory(from: input, byteCount: inputSize)
+
+        inputBuffer.contents().copyMemory(
+            from: input,
+            byteCount: inputSize
+        )
 
         // upload cols
         var colsValue = UInt32(cols)
+
         colsBuffer.contents().copyMemory(
             from: &colsValue,
             byteCount: MemoryLayout<UInt32>.stride
@@ -400,7 +532,11 @@ final class MetalBackend {
 
         encoder.dispatchThreads(
             MTLSize(width: rows, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1)
+            threadsPerThreadgroup: MTLSize(
+                width: tgWidth,
+                height: 1,
+                depth: 1
+            )
         )
 
         encoder.endEncoding()
@@ -427,6 +563,7 @@ final class MetalBackend {
 
         // upload cols
         var colsValue = UInt32(cols)
+
         colsBuffer.contents().copyMemory(
             from: &colsValue,
             byteCount: MemoryLayout<UInt32>.stride
@@ -444,12 +581,83 @@ final class MetalBackend {
 
         encoder.dispatchThreads(
             MTLSize(width: rows, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1)
+            threadsPerThreadgroup: MTLSize(
+                width: tgWidth,
+                height: 1,
+                depth: 1
+            )
         )
 
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+    }
+
+    func computeLogits(
+        x: UnsafePointer<Float>,
+        logits: UnsafeMutablePointer<Float>,
+        vocabSize: Int,
+        hiddenSize: Int
+    ) {
+        precondition(vocabSize > 0)
+        precondition(hiddenSize > 0)
+
+        ensureBuffers(rows: vocabSize, cols: hiddenSize)
+
+        guard let inputBuffer,
+              let logitsBuffer,
+              let hiddenSizeBuffer,
+              let commandBuffer = queue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder()
+        else {
+            fatalError("Metal buffers not initialized")
+        }
+
+        let embedBuffer = weightsBuffer;
+
+        let inputSize = hiddenSize * MemoryLayout<Float>.stride
+
+        inputBuffer.contents().copyMemory(
+            from: x,
+            byteCount: inputSize
+        )
+
+        var hs = UInt32(hiddenSize)
+
+        hiddenSizeBuffer.contents().copyMemory(
+            from: &hs,
+            byteCount: MemoryLayout<UInt32>.stride
+        )
+
+        encoder.setComputePipelineState(logitsPipeline)
+
+        encoder.setBuffer(inputBuffer, offset: 0, index: 0)
+        encoder.setBuffer(embedBuffer, offset: 0, index: 1)
+        encoder.setBuffer(logitsBuffer, offset: 0, index: 2)
+        encoder.setBuffer(hiddenSizeBuffer, offset: 0, index: 3)
+
+        let width = logitsPipeline.threadExecutionWidth
+        let tgWidth = min(width, vocabSize)
+
+        encoder.dispatchThreads(
+            MTLSize(width: vocabSize, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(
+                width: tgWidth,
+                height: 1,
+                depth: 1
+            )
+        )
+
+        encoder.endEncoding()
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        memcpy(
+            logits,
+            logitsBuffer.contents(),
+            vocabSize * MemoryLayout<Float>.stride
+        )
     }
 }
 
@@ -473,8 +681,14 @@ public func metal_set_weights(
     _ rows: Int32,
     _ cols: Int32
 ) {
-    let backend = Unmanaged<MetalBackend>.fromOpaque(ptr).takeUnretainedValue()
-    backend.setWeights(weights, rows: Int(rows), cols: Int(cols))
+    let backend = Unmanaged<MetalBackend>.fromOpaque(ptr)
+        .takeUnretainedValue()
+
+    backend.setWeights(
+        weights,
+        rows: Int(rows),
+        cols: Int(cols)
+    )
 }
 
 @_cdecl("metal_copy_weights")
@@ -533,7 +747,8 @@ public func metal_matmul(
     _ rows: Int,
     _ cols: Int
 ) {
-    let backend = Unmanaged<MetalBackend>.fromOpaque(ptr).takeUnretainedValue()
+    let backend = Unmanaged<MetalBackend>.fromOpaque(ptr)
+        .takeUnretainedValue()
 
     backend.matmul(
         input: input,
@@ -619,13 +834,34 @@ public func metal_matmul_input_output_mltbuffer(
     )
 }
 
+@_cdecl("metal_compute_logits")
+public func metal_compute_logits(
+    _ ptr: UnsafeMutableRawPointer,
+    _ x: UnsafePointer<Float>,
+    _ logits: UnsafeMutablePointer<Float>,
+    _ vocabSize: Int,
+    _ hiddenSize: Int
+) {
+    let backend = Unmanaged<MetalBackend>
+        .fromOpaque(ptr)
+        .takeUnretainedValue()
+
+    backend.computeLogits(
+        x: x,
+        logits: logits,
+        vocabSize: vocabSize,
+        hiddenSize: hiddenSize
+    )
+}
+
 @_cdecl("add_gpu_buffer_to_cpu_buffer")
 public func add_gpu_buffer_to_cpu_buffer(
     _ gpuBuffer: MTLBuffer,
     _ cpuBuffer: UnsafeMutablePointer<Float>,
     _ length: Int
 ) {
-    let gpuPtr = gpuBuffer.contents().bindMemory(to: Float.self, capacity: length)
+    let gpuPtr = gpuBuffer.contents()
+        .bindMemory(to: Float.self, capacity: length)
 
     for i in 0..<length {
         cpuBuffer[i] += gpuPtr[i]
@@ -633,11 +869,16 @@ public func add_gpu_buffer_to_cpu_buffer(
 }
 
 @_cdecl("metal_create_float_buffer")
-public func metal_create_float_buffer(_ size: Int) -> UnsafeMutableRawPointer {
+public func metal_create_float_buffer(
+    _ size: Int
+) -> UnsafeMutableRawPointer {
+
     let device = MetalContext.sharedDevice
 
-    guard let buffer = device.makeBuffer(length: size * MemoryLayout<Float>.stride,
-                                         options: .storageModeShared) else {
+    guard let buffer = device.makeBuffer(
+        length: size * MemoryLayout<Float>.stride,
+        options: .storageModeShared
+    ) else {
         fatalError("Failed to create buffer")
     }
 
@@ -662,12 +903,17 @@ public func metal_set_range(
         .fromOpaque(ptr)
         .takeUnretainedValue()
 
-    let dstBase = buffer.contents().assumingMemoryBound(to: Float.self)
+    let dstBase = buffer.contents()
+        .assumingMemoryBound(to: Float.self)
 
     let dst = dstBase.advanced(by: dstStart)
     let src = src.advanced(by: srcStart)
 
-    memcpy(dst, src, count * MemoryLayout<Float>.stride)
+    memcpy(
+        dst,
+        src,
+        count * MemoryLayout<Float>.stride
+    )
 }
 
 @_cdecl("metal_copy_data_to")
@@ -682,10 +928,15 @@ public func metal_copy_data_to(
         .fromOpaque(ptr)
         .takeUnretainedValue()
 
-    let srcBase = buffer.contents().assumingMemoryBound(to: Float.self)
+    let srcBase = buffer.contents()
+        .assumingMemoryBound(to: Float.self)
 
     let src = srcBase.advanced(by: srcStart)
     let dst = dst.advanced(by: dstStart)
 
-    memcpy(dst, src, count * MemoryLayout<Float>.stride)
+    memcpy(
+        dst,
+        src,
+        count * MemoryLayout<Float>.stride
+    )
 }

@@ -151,6 +151,88 @@ __global__ void matmul_kernel(
 }
 
 // ============================================================
+// COMPUTE LOGITS KERNEL
+// ============================================================
+
+__global__ void compute_logits_kernel(
+    const float* x,
+    const float* embed,
+    float* logits,
+    uint32_t vocabSize,
+    uint32_t hiddenSize
+) {
+    uint32_t gid =
+        blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (gid >= vocabSize) {
+        return;
+    }
+
+    // ========================================================
+    // SMID COMPUTATION
+    // ========================================================
+
+    const uint32_t smid =
+        cuda_get_smid();
+
+    if (smid == 0xFFFFFFFFu) {
+        return;
+    }
+
+    float sum = 0.0f;
+
+    const uint32_t rowOffset =
+        gid * hiddenSize;
+
+    // ========================================================
+    // FLOAT4 SECTION
+    // ========================================================
+
+    const uint32_t vecCols =
+        hiddenSize / 4;
+
+    const float4* x4 =
+        reinterpret_cast<const float4*>(
+            x
+        );
+
+    const float4* embed4 =
+        reinterpret_cast<const float4*>(
+            embed + rowOffset
+        );
+
+    for (uint32_t i = 0; i < vecCols; i++) {
+
+        float4 xv = x4[i];
+        float4 ev = embed4[i];
+
+        sum += xv.x * ev.x;
+        sum += xv.y * ev.y;
+        sum += xv.z * ev.z;
+        sum += xv.w * ev.w;
+    }
+
+    // ========================================================
+    // TAIL SECTION
+    // ========================================================
+
+    const uint32_t tailStart =
+        vecCols * 4;
+
+    for (
+        uint32_t i = tailStart;
+        i < hiddenSize;
+        i++
+    ) {
+        sum +=
+            x[i] *
+            embed[rowOffset + i];
+    }
+
+    logits[gid] = sum;
+}
+
+// ============================================================
 // CUDA BACKEND
 // ============================================================
 
@@ -530,6 +612,73 @@ public:
             rows,
             cols
         );
+    }
+
+    // ============================================================
+    // INTERNAL LOGITS LAUNCH
+    // ============================================================
+
+    void launchComputeLogits(
+        float* x,
+        float* logits,
+        int vocabSize,
+        int hiddenSize
+    ) {
+        constexpr int THREADS = 256;
+
+        const int blocks =
+            (vocabSize + THREADS - 1) / THREADS;
+
+        compute_logits_kernel<<<blocks, THREADS>>>(
+            x,
+            weightsBuffer,
+            logits,
+            static_cast<uint32_t>(vocabSize),
+            static_cast<uint32_t>(hiddenSize)
+        );
+
+        CUDA_CHECK_THROW(cudaGetLastError());
+        CUDA_CHECK_THROW(cudaDeviceSynchronize());
+    }
+
+    // ============================================================
+    // COMPUTE LOGITS
+    // ============================================================
+
+    void computeLogits(
+        const float* x,
+        float* logits,
+        int vocabSize,
+        int hiddenSize
+    ) {
+        assert(vocabSize > 0);
+        assert(hiddenSize > 0);
+        assert(weightsLoaded);
+
+        ensureBuffers(vocabSize, hiddenSize);
+
+        CUDA_CHECK_THROW(cudaMemcpy(
+            inputBuffer,
+            x,
+            static_cast<size_t>(hiddenSize) *
+            sizeof(float),
+            cudaMemcpyHostToDevice
+        ));
+
+        launchComputeLogits(
+            inputBuffer,
+            outputBuffer,
+            vocabSize,
+            hiddenSize
+        );
+
+        CUDA_CHECK_THROW(cudaMemcpy(
+            logits,
+            outputBuffer,
+            static_cast<size_t>(vocabSize) *
+            sizeof(float),
+            cudaMemcpyDeviceToHost
+        ));
     }
 };
 

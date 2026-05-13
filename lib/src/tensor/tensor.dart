@@ -180,6 +180,15 @@ abstract class Tensor {
 
   void dotTo(TensorFloat32Data out, TensorFloat32Data input);
 
+  void computeLogits(
+    TensorFloat32Data x,
+    Float32List logits,
+    int hiddenSize,
+    int vocabSize,
+  ) {
+    toFP32Tensor(cached: true).computeLogits(x, logits, hiddenSize, vocabSize);
+  }
+
   FP32TensorBase toFP32Tensor({bool cached = false});
 }
 

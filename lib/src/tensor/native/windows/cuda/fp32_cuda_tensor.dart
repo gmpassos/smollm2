@@ -165,6 +165,16 @@ class FP32CudaTensor extends FP32TensorBase implements NativeTensor {
   }
 
   @override
+  void computeLogits(
+    TensorFloat32Data x,
+    Float32List logits,
+    int hiddenSize,
+    int vocabSize,
+  ) {
+    _cudaBinding.cudaComputeLogits(x.array, logits, vocabSize, hiddenSize);
+  }
+
+  @override
   Float32List get dataArray {
     final out = Float32List(dataLength);
     _cudaBinding.copyWeightsTo(out, 0, dataLength, 0);

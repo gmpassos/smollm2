@@ -42,6 +42,17 @@ class CPULibrary extends NativeLibrary<CPUBinding> {
     int rows,
     int cols,
   );
+
+  @Native<
+    Void Function(Pointer<Float>, Pointer<Float>, Pointer<Float>, Int32, Int32)
+  >(symbol: 'cpu_compute_logits', isLeaf: true)
+  external static void cpuComputeLogits(
+    Pointer<Float> x,
+    Pointer<Float> emb,
+    Pointer<Float> logits,
+    int hs,
+    int vocabSize,
+  );
 }
 
 class CPUBinding implements NativeBinding {
@@ -59,5 +70,19 @@ class CPUBinding implements NativeBinding {
     output.address,
     rows,
     cols,
+  );
+
+  void cpuComputeLogits(
+    Float32List x,
+    Float32List emb,
+    Float32List logits,
+    int hs,
+    int vocabSize,
+  ) => CPULibrary.cpuComputeLogits(
+    x.address,
+    emb.address,
+    logits.address,
+    hs,
+    vocabSize,
   );
 }

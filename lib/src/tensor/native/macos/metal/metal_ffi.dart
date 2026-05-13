@@ -97,6 +97,17 @@ class MetalLibrary extends NativeLibrary<MetalBinding> {
     int cols,
   );
 
+  @Native<
+    Void Function(Pointer<Void>, Pointer<Float>, Pointer<Float>, Int, Int)
+  >(symbol: 'metal_compute_logits', isLeaf: true)
+  external static void metalComputeLogits(
+    Pointer<Void> backend,
+    Pointer<Float> x,
+    Pointer<Float> logits,
+    int vocabSize,
+    int hiddenSize,
+  );
+
   @Native<Void Function(Pointer<Void>, Pointer<Float>, Int, Int, Int)>(
     symbol: 'metal_copy_weights',
     isLeaf: true,
@@ -240,6 +251,23 @@ class MetalBinding implements NativeBinding {
       outputBuffer,
       rows,
       cols,
+    );
+  }
+
+  void metalComputeLogits(
+    Float32List x,
+    Float32List logits,
+    int vocabSize,
+    int hiddenSize,
+  ) {
+    assert(MetalLibrary.instance.isLibraryLoaded);
+
+    MetalLibrary.metalComputeLogits(
+      _ptr,
+      x.address,
+      logits.address,
+      vocabSize,
+      hiddenSize,
     );
   }
 

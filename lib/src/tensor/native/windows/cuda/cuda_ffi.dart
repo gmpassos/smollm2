@@ -95,6 +95,17 @@ class CudaLibrary extends NativeLibrary<CudaBinding> {
     int cols,
   );
 
+  @Native<
+    Void Function(Pointer<Void>, Pointer<Float>, Pointer<Float>, Int, Int)
+  >(symbol: 'cuda_compute_logits', isLeaf: true)
+  external static void cudaComputeLogits(
+    Pointer<Void> backend,
+    Pointer<Float> x,
+    Pointer<Float> logits,
+    int vocabSize,
+    int hiddenSize,
+  );
+
   @Native<Void Function(Pointer<Void>, Pointer<Float>, Int, Int, Int)>(
     symbol: 'cuda_copy_weights',
     isLeaf: true,
@@ -228,6 +239,23 @@ class CudaBinding implements NativeBinding {
       outputBuffer,
       rows,
       cols,
+    );
+  }
+
+  void cudaComputeLogits(
+    Float32List x,
+    Float32List logits,
+    int vocabSize,
+    int hiddenSize,
+  ) {
+    assert(CudaLibrary.instance.isLibraryLoaded);
+
+    CudaLibrary.cudaComputeLogits(
+      _ptr,
+      x.address,
+      logits.address,
+      vocabSize,
+      hiddenSize,
     );
   }
 

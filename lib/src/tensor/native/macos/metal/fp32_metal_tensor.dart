@@ -163,6 +163,16 @@ class FP32MetalTensor extends FP32TensorBase implements NativeTensor {
   }
 
   @override
+  void computeLogits(
+    TensorFloat32Data x,
+    Float32List logits,
+    int hiddenSize,
+    int vocabSize,
+  ) {
+    _metalBinding.metalComputeLogits(x.array, logits, vocabSize, hiddenSize);
+  }
+
+  @override
   Float32List get dataArray {
     final out = Float32List(dataLength);
     _metalBinding.copyWeightsTo(out, 0, dataLength, 0);
