@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import simd
 
 // MARK: - Metal Context
 
@@ -34,7 +35,21 @@ final class MetalContext {
             float sum = 0.0;
             uint rowOffset = gid * cols;
 
-            for (uint i = 0; i < cols; i++) {
+            uint simdCols = cols / 4;
+
+            const device float4* weights4 =
+                reinterpret_cast<const device float4*>(weights + rowOffset);
+
+            const device float4* input4 =
+                reinterpret_cast<const device float4*>(input);
+
+            for (uint i = 0; i < simdCols; i++) {
+                sum += dot(weights4[i], input4[i]);
+            }
+
+            uint remainderStart = simdCols * 4;
+
+            for (uint i = remainderStart; i < cols; i++) {
                 sum += weights[rowOffset + i] * input[i];
             }
 
