@@ -9,6 +9,18 @@
 #include <stdexcept>
 
 // ============================================================
+// CUDA CHECK
+// ============================================================
+
+#define CUDA_CHECK(x)                                                     \
+do {                                                                      \
+    cudaError_t err = (x);                                                \
+    if (err != cudaSuccess) {                                             \
+        throw std::runtime_error(cudaGetErrorString(err));                \
+    }                                                                     \
+} while (0)
+
+// ============================================================
 // CUDA KERNEL
 // ============================================================
 
@@ -16,9 +28,17 @@ __global__ void matmul_kernel(
     const float* weights,
     const float* input,
     float* output,
+    uint32_t rows,
     uint32_t cols
 ) {
     uint32_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // IMPORTANT:
+    // CUDA launches rounded-up thread counts.
+    // Prevent out-of-bounds access.
+    if (gid >= rows) {
+        return;
+    }
 
     float sum = 0.0f;
 
@@ -42,6 +62,10 @@ public:
     float* inputBuffer = nullptr;
     float* outputBuffer = nullptr;
 
+    size_t weightsCapacityBytes = 0;
+    size_t inputCapacityBytes = 0;
+    size_t outputCapacityBytes = 0;
+
     int bufferRows = 0;
     int bufferCols = 0;
 
@@ -52,67 +76,106 @@ public:
     }
 
     void ensureBuffers(int rows, int cols) {
-        if (bufferRows >= rows &&
-            bufferCols >= cols &&
+        if (rows <= 0 || cols <= 0) {
+            throw std::runtime_error("Invalid rows/cols");
+        }
+
+        const size_t weightsSize = static_cast<size_t>(rows) *
+                                   static_cast<size_t>(cols) *
+                                   sizeof(float);
+
+        const size_t inputSize = static_cast<size_t>(cols) *
+                                 sizeof(float);
+
+        const size_t outputSize = static_cast<size_t>(rows) *
+                                  sizeof(float);
+
+        bool ok =
             weightsBuffer != nullptr &&
             inputBuffer != nullptr &&
-            outputBuffer != nullptr) {
+            outputBuffer != nullptr &&
+            weightsCapacityBytes >= weightsSize &&
+            inputCapacityBytes >= inputSize &&
+            outputCapacityBytes >= outputSize;
+
+        if (ok) {
             return;
         }
 
-        const size_t weightsSize = rows * cols * sizeof(float);
-        const size_t inputSize = cols * sizeof(float);
-        const size_t outputSize = rows * sizeof(float);
+        // ====================================================
+        // WEIGHTS
+        // ====================================================
 
-        if (weightsBuffer == nullptr ||
-            (bufferRows * bufferCols * sizeof(float)) < weightsSize) {
+        if (weightsCapacityBytes < weightsSize) {
 
             if (weightsBuffer != nullptr) {
-                cudaFree(weightsBuffer);
+                CUDA_CHECK(cudaFree(weightsBuffer));
             }
 
-            cudaMalloc(&weightsBuffer, weightsSize);
+            CUDA_CHECK(cudaMalloc(&weightsBuffer, weightsSize));
+
+            weightsCapacityBytes = weightsSize;
         }
 
-        if (inputBuffer == nullptr ||
-            (bufferCols * sizeof(float)) < inputSize) {
+        // ====================================================
+        // INPUT
+        // ====================================================
+
+        if (inputCapacityBytes < inputSize) {
 
             if (inputBuffer != nullptr) {
-                cudaFree(inputBuffer);
+                CUDA_CHECK(cudaFree(inputBuffer));
             }
 
-            cudaMalloc(&inputBuffer, inputSize);
+            CUDA_CHECK(cudaMalloc(&inputBuffer, inputSize));
+
+            inputCapacityBytes = inputSize;
         }
 
-        if (outputBuffer == nullptr ||
-            (bufferRows * sizeof(float)) < outputSize) {
+        // ====================================================
+        // OUTPUT
+        // ====================================================
+
+        if (outputCapacityBytes < outputSize) {
 
             if (outputBuffer != nullptr) {
-                cudaFree(outputBuffer);
+                CUDA_CHECK(cudaFree(outputBuffer));
             }
 
-            cudaMalloc(&outputBuffer, outputSize);
+            CUDA_CHECK(cudaMalloc(&outputBuffer, outputSize));
+
+            outputCapacityBytes = outputSize;
         }
 
-        bufferRows = (rows > bufferRows) ? rows : bufferRows;
-        bufferCols = (cols > bufferCols) ? cols : bufferCols;
+        bufferRows = rows;
+        bufferCols = cols;
     }
 
     void destroyBuffers() {
+
         if (weightsBuffer != nullptr) {
-            cudaFree(weightsBuffer);
+            CUDA_CHECK(cudaFree(weightsBuffer));
             weightsBuffer = nullptr;
         }
 
         if (inputBuffer != nullptr) {
-            cudaFree(inputBuffer);
+            CUDA_CHECK(cudaFree(inputBuffer));
             inputBuffer = nullptr;
         }
 
         if (outputBuffer != nullptr) {
-            cudaFree(outputBuffer);
+            CUDA_CHECK(cudaFree(outputBuffer));
             outputBuffer = nullptr;
         }
+
+        weightsCapacityBytes = 0;
+        inputCapacityBytes = 0;
+        outputCapacityBytes = 0;
+
+        bufferRows = 0;
+        bufferCols = 0;
+
+        weightsLoaded = false;
     }
 
     // ============================================================
@@ -126,14 +189,17 @@ public:
     ) {
         ensureBuffers(rows, cols);
 
-        const size_t size = rows * cols * sizeof(float);
+        const size_t size =
+            static_cast<size_t>(rows) *
+            static_cast<size_t>(cols) *
+            sizeof(float);
 
-        cudaMemcpy(
+        CUDA_CHECK(cudaMemcpy(
             weightsBuffer,
             weights,
             size,
             cudaMemcpyHostToDevice
-        );
+        ));
 
         weightsLoaded = true;
     }
@@ -156,12 +222,12 @@ public:
 
         assert(srcStart + length <= totalWeights);
 
-        cudaMemcpy(
+        CUDA_CHECK(cudaMemcpy(
             dst + dstStart,
             weightsBuffer + srcStart,
-            length * sizeof(float),
+            static_cast<size_t>(length) * sizeof(float),
             cudaMemcpyDeviceToHost
-        );
+        ));
     }
 
     // ============================================================
@@ -180,12 +246,39 @@ public:
 
         assert(srcStart + length <= bufferRows);
 
-        cudaMemcpy(
+        CUDA_CHECK(cudaMemcpy(
             dst + dstStart,
             outputBuffer + srcStart,
-            length * sizeof(float),
+            static_cast<size_t>(length) * sizeof(float),
             cudaMemcpyDeviceToHost
+        ));
+    }
+
+    // ============================================================
+    // INTERNAL KERNEL LAUNCH
+    // ============================================================
+
+    void launchMatmul(
+        float* input,
+        float* output,
+        int rows,
+        int cols
+    ) {
+        constexpr int THREADS = 256;
+
+        const int blocks =
+            (rows + THREADS - 1) / THREADS;
+
+        matmul_kernel<<<blocks, THREADS>>>(
+            weightsBuffer,
+            input,
+            output,
+            static_cast<uint32_t>(rows),
+            static_cast<uint32_t>(cols)
         );
+
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
     }
 
     // ============================================================
@@ -202,32 +295,28 @@ public:
         assert(rows > 0);
         assert(cols > 0);
 
-        cudaMemcpy(
+        ensureBuffers(rows, cols);
+
+        CUDA_CHECK(cudaMemcpy(
             inputBuffer,
             input,
-            cols * sizeof(float),
+            static_cast<size_t>(cols) * sizeof(float),
             cudaMemcpyHostToDevice
-        );
+        ));
 
-        constexpr int THREADS = 256;
-
-        int blocks = (rows + THREADS - 1) / THREADS;
-
-        matmul_kernel<<<blocks, THREADS>>>(
-            weightsBuffer,
+        launchMatmul(
             inputBuffer,
             outputBuffer,
-            static_cast<uint32_t>(cols)
+            rows,
+            cols
         );
 
-        cudaDeviceSynchronize();
-
-        cudaMemcpy(
+        CUDA_CHECK(cudaMemcpy(
             output,
             outputBuffer,
-            rows * sizeof(float),
+            static_cast<size_t>(rows) * sizeof(float),
             cudaMemcpyDeviceToHost
-        );
+        ));
     }
 
     // ============================================================
@@ -241,26 +330,24 @@ public:
         int cols
     ) {
         assert(weightsLoaded);
+        assert(rows > 0);
+        assert(cols > 0);
 
-        constexpr int THREADS = 256;
+        ensureBuffers(rows, cols);
 
-        int blocks = (rows + THREADS - 1) / THREADS;
-
-        matmul_kernel<<<blocks, THREADS>>>(
-            weightsBuffer,
+        launchMatmul(
             input,
             outputBuffer,
-            static_cast<uint32_t>(cols)
+            rows,
+            cols
         );
 
-        cudaDeviceSynchronize();
-
-        cudaMemcpy(
+        CUDA_CHECK(cudaMemcpy(
             output,
             outputBuffer,
-            rows * sizeof(float),
+            static_cast<size_t>(rows) * sizeof(float),
             cudaMemcpyDeviceToHost
-        );
+        ));
     }
 
     // ============================================================
@@ -274,26 +361,24 @@ public:
         int cols
     ) {
         assert(weightsLoaded);
+        assert(rows > 0);
+        assert(cols > 0);
 
-        cudaMemcpy(
+        ensureBuffers(rows, cols);
+
+        CUDA_CHECK(cudaMemcpy(
             inputBuffer,
             input,
-            cols * sizeof(float),
+            static_cast<size_t>(cols) * sizeof(float),
             cudaMemcpyHostToDevice
-        );
+        ));
 
-        constexpr int THREADS = 256;
-
-        int blocks = (rows + THREADS - 1) / THREADS;
-
-        matmul_kernel<<<blocks, THREADS>>>(
-            weightsBuffer,
+        launchMatmul(
             inputBuffer,
             output,
-            static_cast<uint32_t>(cols)
+            rows,
+            cols
         );
-
-        cudaDeviceSynchronize();
     }
 
     // ============================================================
@@ -307,19 +392,17 @@ public:
         int cols
     ) {
         assert(weightsLoaded);
+        assert(rows > 0);
+        assert(cols > 0);
 
-        constexpr int THREADS = 256;
+        ensureBuffers(rows, cols);
 
-        int blocks = (rows + THREADS - 1) / THREADS;
-
-        matmul_kernel<<<blocks, THREADS>>>(
-            weightsBuffer,
+        launchMatmul(
             input,
             output,
-            static_cast<uint32_t>(cols)
+            rows,
+            cols
         );
-
-        cudaDeviceSynchronize();
     }
 };
 
@@ -465,16 +548,20 @@ void cuda_matmul_input_output_cudabuffer(
 
 __declspec(dllexport)
 void* cuda_create_float_buffer(int size) {
+
     float* ptr = nullptr;
 
-    cudaMalloc(&ptr, size * sizeof(float));
+    CUDA_CHECK(cudaMalloc(
+        &ptr,
+        static_cast<size_t>(size) * sizeof(float)
+    ));
 
     return ptr;
 }
 
 __declspec(dllexport)
 void cuda_destroy_buffer(void* ptr) {
-    cudaFree(ptr);
+    CUDA_CHECK(cudaFree(ptr));
 }
 
 __declspec(dllexport)
@@ -485,12 +572,12 @@ void cuda_set_range(
     int srcStart,
     int count
 ) {
-    cudaMemcpy(
+    CUDA_CHECK(cudaMemcpy(
         static_cast<float*>(ptr) + dstStart,
         src + srcStart,
-        count * sizeof(float),
+        static_cast<size_t>(count) * sizeof(float),
         cudaMemcpyHostToDevice
-    );
+    ));
 }
 
 __declspec(dllexport)
@@ -501,12 +588,12 @@ void cuda_copy_data_to(
     int dstStart,
     int count
 ) {
-    cudaMemcpy(
+    CUDA_CHECK(cudaMemcpy(
         dst + dstStart,
         static_cast<float*>(ptr) + srcStart,
-        count * sizeof(float),
+        static_cast<size_t>(count) * sizeof(float),
         cudaMemcpyDeviceToHost
-    );
+    ));
 }
 
 __declspec(dllexport)
@@ -517,12 +604,12 @@ void add_gpu_buffer_to_cpu_buffer(
 ) {
     float* tmp = new float[length];
 
-    cudaMemcpy(
+    CUDA_CHECK(cudaMemcpy(
         tmp,
         gpuBuffer,
-        length * sizeof(float),
+        static_cast<size_t>(length) * sizeof(float),
         cudaMemcpyDeviceToHost
-    );
+    ));
 
     for (int i = 0; i < length; i++) {
         cpuBuffer[i] += tmp[i];
