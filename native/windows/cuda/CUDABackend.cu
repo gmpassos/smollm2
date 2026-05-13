@@ -942,6 +942,39 @@ void cuda_matmul_input_output_cudabuffer(
 }
 
 // ============================================================
+// COMPUTE LOGITS
+// ============================================================
+
+__declspec(dllexport)
+void cuda_compute_logits(
+    void* ptr,
+    const float* x,
+    float* logits,
+    int vocabSize,
+    int hiddenSize
+) {
+    if (ptr == nullptr) {
+        return;
+    }
+
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->computeLogits(
+            x,
+            logits,
+            vocabSize,
+            hiddenSize
+        );
+
+    } catch (...) {
+        return;
+    }
+}
+
+// ============================================================
 // BUFFER CREATE / DESTROY
 // ============================================================
 
