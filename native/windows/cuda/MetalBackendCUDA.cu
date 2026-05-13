@@ -35,6 +35,33 @@ do {                                                             \
         return nullptr;                                          \
     }                                                            \
 } while (0)
+// ============================================================
+// SMID HELPERS
+// ============================================================
+
+#if defined(__CUDA_ARCH__)
+
+__device__ __forceinline__
+uint32_t cuda_get_smid() {
+
+    uint32_t smid;
+
+    asm volatile(
+        "mov.u32 %0, %smid;"
+        : "=r"(smid)
+    );
+
+    return smid;
+}
+
+#else
+
+static inline
+uint32_t cuda_get_smid() {
+    return 0;
+}
+
+#endif
 
 // ============================================================
 // CUDA KERNEL
@@ -57,12 +84,67 @@ __global__ void matmul_kernel(
         return;
     }
 
+    // ========================================================
+    // SMID COMPUTATION
+    // ========================================================
+
+    const uint32_t smid =
+        cuda_get_smid();
+
+    // Prevent compiler from optimizing away SMID fetch.
+    // This keeps SMID computation active with near-zero cost.
+    if (smid == 0xFFFFFFFFu) {
+        return;
+    }
+
     float sum = 0.0f;
 
-    uint32_t rowOffset = gid * cols;
+    const uint32_t rowOffset =
+        gid * cols;
 
-    for (uint32_t i = 0; i < cols; i++) {
-        sum += weights[rowOffset + i] * input[i];
+    // ========================================================
+    // FLOAT4 SECTION
+    // ========================================================
+
+    const uint32_t vecCols =
+        cols / 4;
+
+    const float4* weights4 =
+        reinterpret_cast<const float4*>(
+            weights + rowOffset
+        );
+
+    const float4* input4 =
+        reinterpret_cast<const float4*>(
+            input
+        );
+
+    for (uint32_t i = 0; i < vecCols; i++) {
+
+        float4 w = weights4[i];
+        float4 v = input4[i];
+
+        sum += w.x * v.x;
+        sum += w.y * v.y;
+        sum += w.z * v.z;
+        sum += w.w * v.w;
+    }
+
+    // ========================================================
+    // TAIL SECTION
+    // ========================================================
+
+    const uint32_t tailStart =
+        vecCols * 4;
+
+    for (
+        uint32_t i = tailStart;
+        i < cols;
+        i++
+    ) {
+        sum +=
+            weights[rowOffset + i] *
+            input[i];
     }
 
     output[gid] = sum;
@@ -138,7 +220,7 @@ public:
             }
 
             CUDA_CHECK_THROW(cudaMalloc(
-                &weightsBuffer,
+                reinterpret_cast<void**>(&weightsBuffer),
                 weightsSize
             ));
 
@@ -158,7 +240,7 @@ public:
             }
 
             CUDA_CHECK_THROW(cudaMalloc(
-                &inputBuffer,
+                reinterpret_cast<void**>(&inputBuffer),
                 inputSize
             ));
 
@@ -178,7 +260,7 @@ public:
             }
 
             CUDA_CHECK_THROW(cudaMalloc(
-                &outputBuffer,
+                reinterpret_cast<void**>(&outputBuffer),
                 outputSize
             ));
 
@@ -720,7 +802,7 @@ void* cuda_create_float_buffer(int size) {
     float* ptr = nullptr;
 
     CUDA_CHECK_RETURN_NULL(cudaMalloc(
-        &ptr,
+        reinterpret_cast<void**>(&ptr),
         static_cast<size_t>(size) *
         sizeof(float)
     ));
