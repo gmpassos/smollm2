@@ -30,7 +30,7 @@ class MetalTensorFloat32Data implements TensorFloat32Data {
 
   @override
   Float32List arrayView({Float32List? buffer}) {
-    var length = this.length;
+    final length = this.length;
 
     if (buffer == null) {
       buffer = Float32List(length);
@@ -93,7 +93,8 @@ class FP32MetalTensor extends FP32TensorBase implements NativeTensor {
     : dataLength = data.length {
     if (!colsX4Compatible) {
       throw StateError(
-        "`FP32MetalTensor` not compatible with rows:$rows and cols:$cols not X4 compatible!",
+        "`FP32MetalTensor` not compatible with "
+        "rows:$rows and cols:$cols not X4 compatible!",
       );
     }
 
@@ -180,7 +181,12 @@ class FP32MetalTensor extends FP32TensorBase implements NativeTensor {
 
   @override
   String toString() =>
-      'FP32Tensor{size: $size, rows: $rows cols: $cols, data: $dataLength}';
+      'FP32Tensor{'
+      'size: $size, '
+      'rows: $rows '
+      'cols: $cols, '
+      'data: $dataLength'
+      '}';
 }
 
 class FP32MetalTensorReader extends NativeTensorReader<FP32MetalTensor> {
@@ -204,7 +210,8 @@ class FP32MetalTensorReader extends NativeTensorReader<FP32MetalTensor> {
 
       default:
         throw UnsupportedError(
-          "Can't read from data with `QuantType`: $dataQuantType",
+          "Can't read from data with "
+          "`QuantType`: $dataQuantType",
         );
     }
   }

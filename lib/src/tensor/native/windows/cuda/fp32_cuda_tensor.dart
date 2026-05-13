@@ -68,19 +68,14 @@ class CudaTensorFloat32Data implements TensorFloat32Data {
   }
 
   @override
-  String toString() {
-    return 'CudaTensorFloat32Data@$_data';
-  }
+  String toString() => 'CudaTensorFloat32Data@$_data';
 }
 
 class FP32CudaTensor extends FP32TensorBase implements NativeTensor {
   static bool? _boot;
 
   static bool boot({bool tryLoad = false}) {
-    if (_boot != null) {
-      return _boot!;
-    }
-
+    if (_boot != null) return _boot!;
     _boot = false;
 
     if (tryLoad) {
@@ -99,8 +94,8 @@ class FP32CudaTensor extends FP32TensorBase implements NativeTensor {
     : dataLength = data.length {
     if (!colsX4Compatible) {
       throw StateError(
-        '`FP32CudaTensor` not compatible with '
-        'rows:$rows and cols:$cols not X4 compatible!',
+        "`FP32CudaTensor` not compatible with "
+        "rows:$rows and cols:$cols not X4 compatible!",
       );
     }
 
@@ -135,9 +130,7 @@ class FP32CudaTensor extends FP32TensorBase implements NativeTensor {
   }
 
   @override
-  FP32CudaTensor toFP32Tensor({bool cached = true}) {
-    return this;
-  }
+  FP32CudaTensor toFP32Tensor({bool cached = true}) => this;
 
   @override
   void dotTo(TensorFloat32Data out, TensorFloat32Data input) {
@@ -174,9 +167,7 @@ class FP32CudaTensor extends FP32TensorBase implements NativeTensor {
   @override
   Float32List get dataArray {
     final out = Float32List(dataLength);
-
     _cudaBinding.copyWeightsTo(out, 0, dataLength, 0);
-
     return out;
   }
 
@@ -191,14 +182,13 @@ class FP32CudaTensor extends FP32TensorBase implements NativeTensor {
   }
 
   @override
-  String toString() {
-    return 'FP32CudaTensor{'
-        'size: $size, '
-        'rows: $rows '
-        'cols: $cols, '
-        'data: $dataLength'
-        '}';
-  }
+  String toString() =>
+      'FP32CudaTensor{'
+      'size: $size, '
+      'rows: $rows '
+      'cols: $cols, '
+      'data: $dataLength'
+      '}';
 }
 
 class FP32CudaTensorReader extends NativeTensorReader<FP32CudaTensor> {
@@ -230,15 +220,11 @@ class FP32CudaTensorReader extends NativeTensorReader<FP32CudaTensor> {
 
   FP32CudaTensor _readBF16(DataReader dataReader, int rows, int cols) {
     final bf16Tensor = BF16Tensor.readFromH(dataReader, rows, cols);
-
     final fp32tensor = bf16Tensor.toFP32Tensor(cached: false);
-
     return fp32tensor.toFP32CudaTensor();
   }
 }
 
 extension FP32TensorToFP32CudaTensorExtension on FP32Tensor {
-  FP32CudaTensor toFP32CudaTensor() {
-    return FP32CudaTensor(rows, cols, dataArray);
-  }
+  FP32CudaTensor toFP32CudaTensor() => FP32CudaTensor(rows, cols, dataArray);
 }

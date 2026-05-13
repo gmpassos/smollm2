@@ -251,7 +251,7 @@ class MetalBinding implements NativeBinding {
   ]) {
     assert(MetalLibrary.instance.isLibraryLoaded);
 
-    var length = dstEnd - dstStart;
+    final length = dstEnd - dstStart;
 
     assert(dstStart >= 0);
     assert(dstEnd >= dstStart);
@@ -275,7 +275,7 @@ class MetalBinding implements NativeBinding {
   ]) {
     assert(MetalLibrary.instance.isLibraryLoaded);
 
-    var length = dstEnd - dstStart;
+    final length = dstEnd - dstStart;
 
     assert(dstStart >= 0);
     assert(dstEnd >= dstStart);
@@ -378,6 +378,10 @@ class MetalFloat32Buffer {
   bool get isDisposed => _disposed;
 
   void dispose() {
+    if (_disposed) {
+      return;
+    }
+
     assert(MetalLibrary.instance.isLibraryLoaded);
     _disposed = true;
     _finalizer.detach(this);

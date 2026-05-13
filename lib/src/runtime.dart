@@ -10,6 +10,7 @@ import 'kv_cache.dart';
 import 'quant_type.dart';
 import 'tensor/native/macos/cpu/fp32_cpu_tensor.dart';
 import 'tensor/native/macos/metal/fp32_metal_tensor.dart';
+import 'tensor/native/windows/cuda/fp32_cuda_tensor.dart';
 import 'tensor/tensor.dart';
 import 'tokenizer.dart';
 import 'weights.dart';
@@ -152,6 +153,8 @@ class LLMRuntime {
     if (layersTensorsTypes.containsKey(FP32CPUTensor)) {
       tensorCreator = CPUTensorFloat32Data.new;
     } else if (layersTensorsTypes.containsKey(FP32MetalTensor)) {
+      tensorCreator = MetalTensorFloat32Data.new;
+    } else if (layersTensorsTypes.containsKey(FP32CudaTensor)) {
       tensorCreator = MetalTensorFloat32Data.new;
     } else {
       tensorCreator = TensorFloat32Data.new;

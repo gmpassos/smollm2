@@ -173,13 +173,11 @@ class CudaBinding implements NativeBinding {
 
   void setWeights(Float32List weights, int rows, int cols) {
     assert(CudaLibrary.instance.isLibraryLoaded);
-
     CudaLibrary.cudaSetWeights(_ptr, weights.address, rows, cols);
   }
 
   void cudaMatmul(Float32List input, Float32List output, int rows, int cols) {
     assert(CudaLibrary.instance.isLibraryLoaded);
-
     CudaLibrary.cudaMatmul(_ptr, input.address, output.address, rows, cols);
   }
 
@@ -190,7 +188,6 @@ class CudaBinding implements NativeBinding {
     int cols,
   ) {
     assert(CudaLibrary.instance.isLibraryLoaded);
-
     CudaLibrary.cudaMatmulInputCudaBuffer(
       _ptr,
       inputBuffer,
@@ -244,6 +241,11 @@ class CudaBinding implements NativeBinding {
 
     final length = dstEnd - dstStart;
 
+    assert(dstStart >= 0);
+    assert(dstEnd >= dstStart);
+    assert(dstEnd <= dst.length);
+    assert(dataStart >= 0);
+
     CudaLibrary.cudaCopyWeights(_ptr, dst.address, dstStart, dataStart, length);
   }
 
@@ -256,6 +258,11 @@ class CudaBinding implements NativeBinding {
     assert(CudaLibrary.instance.isLibraryLoaded);
 
     final length = dstEnd - dstStart;
+
+    assert(dstStart >= 0);
+    assert(dstEnd >= dstStart);
+    assert(dstEnd <= dst.length);
+    assert(dataStart >= 0);
 
     CudaLibrary.cudaCopyOutput(_ptr, dst.address, dstStart, dataStart, length);
   }
@@ -277,23 +284,17 @@ class CudaFloat32Buffer {
 
   final int length;
 
-  bool _disposed = false;
-
   CudaFloat32Buffer._(this._ptr, this.length) {
     _finalizer.attach(this, _ptr, detach: this);
   }
 
   factory CudaFloat32Buffer(int length) {
     assert(CudaLibrary.instance.isLibraryLoaded);
-
     final ptr = CudaLibrary.cudaCreateFloatBuffer(length);
-
     return CudaFloat32Buffer._(ptr, length);
   }
 
   Pointer<Void> get ptr => _ptr;
-
-  bool get isDisposed => _disposed;
 
   void setRange(int start, int end, Float32List iterable, [int skipCount = 0]) {
     if (_disposed) {
@@ -354,6 +355,10 @@ class CudaFloat32Buffer {
     CudaLibrary.addGpuBufferToCpuBuffer(_ptr, dst.address, length);
   }
 
+  bool _disposed = false;
+
+  bool get isDisposed => _disposed;
+
   void dispose() {
     if (_disposed) {
       return;
@@ -362,14 +367,10 @@ class CudaFloat32Buffer {
     assert(CudaLibrary.instance.isLibraryLoaded);
 
     _disposed = true;
-
     _finalizer.detach(this);
-
     CudaLibrary.cudaDestroyBuffer(_ptr);
   }
 
   @override
-  String toString() {
-    return 'CudaFloat32Buffer#${_ptr.address}{length: $length}';
-  }
+  String toString() => 'CudaFloat32Buffer#${_ptr.address}{length: $length}';
 }
