@@ -155,7 +155,7 @@ class LLMRuntime {
     } else if (layersTensorsTypes.containsKey(FP32MetalTensor)) {
       tensorCreator = MetalTensorFloat32Data.new;
     } else if (layersTensorsTypes.containsKey(FP32CudaTensor)) {
-      tensorCreator = MetalTensorFloat32Data.new;
+      tensorCreator = CudaTensorFloat32Data.new;
     } else {
       tensorCreator = TensorFloat32Data.new;
     }
