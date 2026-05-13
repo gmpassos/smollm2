@@ -8,7 +8,10 @@ import 'config.dart';
 import 'data.dart';
 import 'kv_cache.dart';
 import 'quant_type.dart';
-import 'tensor.dart';
+import 'tensor/native/macos/cpu/fp32_cpu_tensor.dart';
+import 'tensor/native/macos/metal/fp32_metal_tensor.dart';
+import 'tensor/native/windows/cuda/fp32_cuda_tensor.dart';
+import 'tensor/tensor.dart';
 import 'tokenizer.dart';
 import 'weights.dart';
 
@@ -35,19 +38,26 @@ class LLMRuntime {
 
   late final List<KVCache> kvCaches;
 
-  late final Float32ListX4 x;
-  late final Float32ListX4 xb;
-  late final Float32ListX4 xb2;
+  late final TensorFloat32Data x;
+  late final TensorFloat32Data xb;
+  late final TensorFloat32Data xb2;
 
-  late final Float32List q;
-  late final Float32List k;
-  late final Float32List v;
+  late final TensorFloat32Data q;
+  late final Float32List qViewBuffer;
+  late final TensorFloat32Data k;
+  late final Float32List kViewBuffer;
+  late final TensorFloat32Data v;
+  late final Float32List vViewBuffer;
 
-  late final Float32List att;
+  late final Float32List attention;
+  late final double attentionScale;
+
   late final Float32List logits;
 
-  late final Float32List hb;
-  late final Float32List hb2;
+  late final TensorFloat32Data hb;
+  late final Float32List hbViewBuffer;
+  late final TensorFloat32Data hb2;
+  late final Float32List hb2ViewBuffer;
 
   bool _loaded = false;
 
@@ -125,7 +135,7 @@ class LLMRuntime {
 
     await modelIO.close();
 
-    _precomputeRope();
+    _precomputeRoPE();
     _buildKVCaches();
 
     final hd = config.headDim;
@@ -136,19 +146,43 @@ class LLMRuntime {
     final attSize = config.maxSeqLen;
     final vocabSize = config.vocabSize;
 
-    x = Float32List(hiddenSize).asFloat32ListX4;
-    xb = Float32List(hiddenSize).asFloat32ListX4;
-    xb2 = Float32List(hiddenSize).asFloat32ListX4;
+    var layersTensorsTypes = weights.layersTensorsTypes;
+    // print('!!! $layersTensorsTypes: $layersTensorsTypes');
 
-    q = Float32List(numHeads * hd);
-    k = Float32List(numKvHeads * hd);
-    v = Float32List(numKvHeads * hd);
+    TensorFloat32DataCreator tensorCreator;
+    if (layersTensorsTypes.containsKey(FP32CPUTensor)) {
+      tensorCreator = CPUTensorFloat32Data.new;
+    } else if (layersTensorsTypes.containsKey(FP32MetalTensor)) {
+      tensorCreator = MetalTensorFloat32Data.new;
+    } else if (layersTensorsTypes.containsKey(FP32CudaTensor)) {
+      tensorCreator = CudaTensorFloat32Data.new;
+    } else {
+      tensorCreator = TensorFloat32Data.new;
+    }
 
-    att = Float32List(attSize * numHeads);
+    x = TensorFloat32Data(hiddenSize);
+    xb = tensorCreator(hiddenSize);
+    xb2 = TensorFloat32Data(hiddenSize);
+
+    q = tensorCreator(numHeads * hd);
+    qViewBuffer = Float32List(q.length);
+
+    k = tensorCreator(numKvHeads * hd);
+    kViewBuffer = Float32List(k.length);
+
+    v = tensorCreator(numKvHeads * hd);
+    vViewBuffer = Float32List(v.length);
+
+    attention = Float32List(attSize * numHeads);
+    attentionScale = 1.0 / math.sqrt(hd.toDouble());
+
     logits = Float32List(vocabSize);
 
-    hb = Float32List(intermediateSize);
-    hb2 = Float32List(intermediateSize);
+    hb = tensorCreator(intermediateSize);
+    hbViewBuffer = Float32List(intermediateSize);
+
+    hb2 = tensorCreator(intermediateSize);
+    hb2ViewBuffer = Float32List(intermediateSize);
 
     loadStart.stop();
 
@@ -235,22 +269,9 @@ class LLMRuntime {
     math.Random? jitterRandom,
     double? jitterScale,
   ) {
-    if (jitterRandom != null) {
-      jitterScale ??= config.quantType == QuantType.q8
-          ? Q8Tensor.defaultQ8DequantizationJitterScale
-          : Q16Tensor.defaultQ16DequantizationJitterScale;
-
-      log(
-        'Loading weights and dequantizing Q16 → FP32 with jitter injection '
-        '(jitterScale: $jitterScale)...',
-      );
-    } else {
-      log('Loading weights...');
-    }
-
     final loadStart = Stopwatch()..start();
 
-    weights = ModelWeights(config);
+    weights = ModelWeights(config, logger: logger);
 
     weights.load(
       config,
@@ -269,7 +290,7 @@ class LLMRuntime {
   late Float32List ropeCos; // [maxSeqLen * headDim/2]
   late Float32List ropeSin;
 
-  void _precomputeRope() {
+  void _precomputeRoPE() {
     final hd = config.headDim;
     final maxLen = config.maxSeqLen;
     final theta = config.ropeTheta;
@@ -328,29 +349,30 @@ class LLMRuntime {
 
   ///////////////////////////////////////////
 
+  Float32ListX4 _outoutBuffer = Float32List(0).asFloat32ListX4;
+
   void rmsNorm(
-    final Float32ListX4 out,
-    final Float32ListX4 x,
-    final Float32ListX4 w,
+    final TensorFloat32Data out,
+    final TensorFloat32Data x,
+    final TensorFloat32Data w,
     final int n,
     final double eps,
   ) {
     if (n == 0) return;
 
-    final outList = out.list;
-    final outListX4 = out.listX4;
+    // print('!!! ${out.runtimeType} ; ${x.runtimeType} ; ${w.runtimeType}');
 
-    final xList = x.list;
-    final xListX4 = x.listX4;
+    final xArray = x.array;
+    final xArrayX4 = x.arrayX4;
 
-    final wList = w.list;
-    final wList4 = w.listX4;
+    final wArray = w.array;
+    final wArrayX4 = w.arrayX4;
 
     final n4 = n ~/ 4;
 
     Float32x4 ssVec;
     {
-      final v = xListX4[0];
+      final v = xArrayX4[0];
       ssVec = v * v;
     }
 
@@ -358,7 +380,7 @@ class LLMRuntime {
     // sum of squares (SIMD)
     // -------------------------
     for (int i = 1; i < n4; i++) {
-      final v = xListX4[i];
+      final v = xArrayX4[i];
       ssVec += v * v;
     }
 
@@ -366,7 +388,7 @@ class LLMRuntime {
 
     // tail (if n not multiple of 4)
     for (int i = n4 << 2; i < n; i++) {
-      final v = xList[i];
+      final v = xArray[i];
       ss += v * v;
     }
 
@@ -374,34 +396,59 @@ class LLMRuntime {
 
     final scaleVec = Float32x4.splat(scale);
 
+    final Float32List outArray;
+    final Float32x4List outArrayX4;
+    final bool needsCopyToOut;
+
+    if (out.dataType == Float32List) {
+      outArray = out.array;
+      outArrayX4 = out.arrayX4;
+      needsCopyToOut = false;
+    } else {
+      if (_outoutBuffer.length != out.length) {
+        _outoutBuffer = Float32List(out.length).asFloat32ListX4;
+      }
+
+      outArray = _outoutBuffer.list;
+      outArrayX4 = _outoutBuffer.listX4;
+      needsCopyToOut = true;
+    }
+
     // -------------------------
     // normalize (SIMD)
     // -------------------------
     for (int i = 0; i < n4; i++) {
-      outListX4[i] = xListX4[i] * scaleVec * wList4[i];
+      outArrayX4[i] = xArrayX4[i] * scaleVec * wArrayX4[i];
     }
 
     // -------------------------
     // tail (scalar)
     // -------------------------
     for (int i = n4 << 2; i < n; i++) {
-      outList[i] = xList[i] * scale * wList[i];
+      outArray[i] = xArray[i] * scale * wArray[i];
+    }
+
+    if (needsCopyToOut) {
+      out.setRange(0, out.length, outArray, 0);
     }
   }
 
-  void applyRope(Float32List v, int offset, int hd, int pos) {
+  void applyRoPE(Float32List v, int offset, int hd, int pos) {
     final half = hd ~/ 2;
     final base = pos * hd;
 
     for (int i = 0; i < half; i++) {
-      final v0 = v[offset + i];
-      final v1 = v[offset + i + half];
+      final offsetI = offset + i;
+      final offsetIHalf = offsetI + half;
+
+      final v0 = v[offsetI];
+      final v1 = v[offsetIHalf];
 
       final c = ropeCos[base + i];
       final s = ropeSin[base + i];
 
-      v[offset + i] = v0 * c - v1 * s;
-      v[offset + i + half] = v1 * c + v0 * s;
+      v[offsetI] = v0 * c - v1 * s;
+      v[offsetIHalf] = v1 * c + v0 * s;
     }
   }
 
@@ -411,140 +458,21 @@ class LLMRuntime {
     final w = weights;
 
     final hs = c.hiddenSize;
-    final hd = c.headDim;
     final nh = c.numHeads;
     final nkv = c.numKvHeads;
     final ng = nh ~/ nkv;
 
-    final xList = x.list;
-    final xbList = xb.list;
-    final xb2List = xb2.list;
-
-    final emb = w.embedTokens.toFP32Tensor(cached: true).data.list;
+    final xArray = x.array;
+    final xArrayX4 = x.arrayX4;
 
     // Embedding:
     {
       final embOffset = tok * hs;
-      xList.setRange(0, hs, emb, embOffset);
+      xArray.setRange(0, hs, w.embedTokensArray.list, embOffset);
     }
 
-    final attScale = 1.0 / math.sqrt(hd.toDouble());
-
     for (int l = 0; l < c.numLayers; l++) {
-      final layer = w.layers[l];
-      final kv = kvCaches[l];
-
-      final kCache = kv.kCache;
-      final vCache = kv.vCache;
-      final cacheLen = kv.cacheLen;
-
-      final slen = cacheLen + 1;
-      final attSize = c.maxSeqLen;
-
-      // -------------------------
-      // Norm
-      // -------------------------
-      rmsNorm(xb, x, layer.inputLayerNorm.data, hs, c.rmsNormEps);
-
-      layer.qProj.dotTo(q, xb);
-      layer.kProj.dotTo(k, xb);
-      layer.vProj.dotTo(v, xb);
-
-      // -------------------------
-      // RoPE
-      // -------------------------
-      for (int h = 0; h < nh; h++) {
-        applyRope(q, h * hd, hd, pos);
-      }
-      for (int h = 0; h < nkv; h++) {
-        applyRope(k, h * hd, hd, pos);
-      }
-
-      // -------------------------
-      // KV cache write
-      // -------------------------
-      for (int h = 0; h < nkv; h++) {
-        final dst = kv.offset(h, cacheLen);
-        final src = h * hd;
-
-        for (int i = 0; i < hd; i++) {
-          kCache[dst + i] = k[src + i];
-          vCache[dst + i] = v[src + i];
-        }
-      }
-
-      // -------------------------
-      // Attention
-      // -------------------------
-      xb2List.fillRange(0, hs, 0.0);
-
-      for (int h = 0; h < nh; h++) {
-        final kvh = h ~/ ng;
-        final qOff = h * hd;
-
-        final cacheBase = kvh * attSize * hd;
-        final attBase = h * attSize;
-
-        // compute scores
-        for (int t = 0; t < slen; t++) {
-          if (t > pos) {
-            att[attBase + t] = -1e9;
-          } else {
-            final kOff = cacheBase + t * hd;
-            double score = 0.0;
-
-            for (int d = 0; d < hd; d++) {
-              score += q[qOff + d] * kCache[kOff + d];
-            }
-
-            att[attBase + t] = score * attScale;
-          }
-        }
-
-        softmaxSegment(att, attBase, slen);
-
-        final outOffset = h * hd;
-
-        for (int t = 0; t < slen; t++) {
-          final a = att[attBase + t];
-          final vOff = cacheBase + t * hd;
-
-          for (int d = 0; d < hd; d++) {
-            xb2List[outOffset + d] += a * vCache[vOff + d];
-          }
-        }
-      }
-
-      // -------------------------
-      // Output projection
-      // -------------------------
-      layer.oProj.dotTo(xbList, xb2);
-
-      for (int i = 0; i < hs; i++) {
-        xList[i] += xbList[i];
-      }
-
-      // -------------------------
-      // MLP
-      // -------------------------
-      rmsNorm(xb, x, layer.postAttentionLayerNorm.data, hs, c.rmsNormEps);
-
-      layer.gateProj.dotTo(hb, xb);
-      layer.upProj.dotTo(hb2, xb);
-
-      final inter = c.intermediateSize;
-
-      for (int i = 0; i < inter; i++) {
-        hb[i] = silu(hb[i]) * hb2[i];
-      }
-
-      layer.downProj.dotTo(xbList, hb.asFloat32ListX4);
-
-      for (int i = 0; i < hs; i++) {
-        xList[i] += xbList[i];
-      }
-
-      kv.cacheLen = slen;
+      _forwardLayer(l, pos, nkv, ng);
     }
 
     // -------------------------
@@ -555,18 +483,224 @@ class LLMRuntime {
     // -------------------------
     // Logits
     // -------------------------
+    _computeLogits(xArray, xArrayX4);
+  }
+
+  void _computeLogits(Float32List xArray, Float32x4List xArrayX4) {
+    final c = config;
+    final embedTokens = weights.embedTokens;
     final logits = this.logits;
+    embedTokens.computeLogits(x, logits, c.hiddenSize, c.vocabSize);
+  }
 
-    for (int i = 0; i < c.vocabSize; i++) {
-      final row = i * hs;
+  void _forwardLayer(int l, int pos, int nkv, int ng) {
+    final c = config;
+    final w = weights;
 
-      double sum = 0.0;
-      for (int j = 0; j < hs; j++) {
-        sum += xList[j] * emb[row + j];
+    final nh = c.numHeads;
+    final nkv = c.numKvHeads;
+    final ng = nh ~/ nkv;
+
+    ////////////////////
+
+    final layer = w.layers[l];
+    final kv = kvCaches[l];
+
+    final cacheLen = kv.cacheLen;
+    final slen = cacheLen + 1;
+    final attSize = c.maxSeqLen;
+
+    ////////////////////
+
+    _rmsNormInput(layer);
+
+    _qkvProjection(layer);
+
+    _applyRoPEToQK(pos);
+
+    _kvCacheWrite(kv, cacheLen);
+
+    _computeSelfAttention(kv, ng, attSize, slen, pos);
+
+    _outputProjection(layer);
+
+    _computeMLP(layer);
+
+    kv.cacheLen = slen;
+  }
+
+  void _rmsNormInput(LayerWeights layer) {
+    final Config c = config;
+    rmsNorm(xb, x, layer.inputLayerNorm.data, c.hiddenSize, c.rmsNormEps);
+  }
+
+  void _qkvProjection(LayerWeights layer) {
+    final xb = this.xb;
+    layer.qProj.dotTo(q, xb);
+    layer.kProj.dotTo(k, xb);
+    layer.vProj.dotTo(v, xb);
+  }
+
+  void _applyRoPEToQK(int pos) {
+    final Config c = config;
+    final hd = c.headDim;
+    final nh = c.numHeads;
+    final nkv = c.numKvHeads;
+
+    final qArray = q.arrayView(buffer: qViewBuffer);
+    final kArray = k.arrayView(buffer: kViewBuffer);
+
+    for (int h = 0; h < nh; h++) {
+      applyRoPE(qArray, h * hd, hd, pos);
+    }
+
+    for (int h = 0; h < nkv; h++) {
+      applyRoPE(kArray, h * hd, hd, pos);
+    }
+
+    if (!q.isInDartMemory) {
+      q.setRange(0, q.length, qArray);
+    }
+
+    if (!k.isInDartMemory) {
+      k.setRange(0, k.length, kArray);
+    }
+  }
+
+  void _kvCacheWrite(KVCache kv, int cacheLen) {
+    final c = config;
+    final hd = c.headDim;
+    final nkv = c.numKvHeads;
+
+    ////////////////////
+
+    final kCache = kv.kCache;
+    final vCache = kv.vCache;
+    final cacheLen = kv.cacheLen;
+
+    final kArray = k.arrayView(buffer: kViewBuffer);
+    final vArray = v.arrayView(buffer: vViewBuffer);
+
+    for (int h = 0; h < nkv; h++) {
+      final dst = kv.offset(h, cacheLen);
+      final src = h * hd;
+
+      for (int i = 0; i < hd; i++) {
+        kCache[dst + i] = kArray[src + i];
+        vCache[dst + i] = vArray[src + i];
+      }
+    }
+  }
+
+  void _computeSelfAttention(
+    KVCache kv,
+    int ng,
+    int attSize,
+    int slen,
+    int pos,
+  ) {
+    final c = config;
+
+    final hs = c.hiddenSize;
+    final hd = c.headDim;
+    final nh = c.numHeads;
+    final nkv = c.numKvHeads;
+    final ng = nh ~/ nkv;
+
+    final xb2Array = xb2.array;
+
+    final kCache = kv.kCache;
+    final vCache = kv.vCache;
+
+    final qArray = q.arrayView(buffer: qViewBuffer);
+
+    ////////////////////
+
+    final attSize = c.maxSeqLen;
+
+    xb2Array.fillRange(0, hs, 0.0);
+
+    final attention = this.attention;
+    final attentionScale = this.attentionScale;
+
+    for (int h = 0; h < nh; h++) {
+      final kvh = h ~/ ng;
+      final qOff = h * hd;
+
+      final cacheBase = kvh * attSize * hd;
+      final attBase = h * attSize;
+
+      // compute scores
+      for (int t = 0; t < slen; t++) {
+        if (t > pos) {
+          attention[attBase + t] = -1e9;
+        } else {
+          final kOff = cacheBase + t * hd;
+          double score = 0.0;
+
+          for (int d = 0; d < hd; d++) {
+            score += qArray[qOff + d] * kCache[kOff + d];
+          }
+
+          attention[attBase + t] = score * attentionScale;
+        }
       }
 
-      logits[i] = sum;
+      softmaxSegment(attention, attBase, slen);
+
+      final outOffset = h * hd;
+
+      for (int t = 0; t < slen; t++) {
+        final a = attention[attBase + t];
+        final vOff = cacheBase + t * hd;
+
+        for (int d = 0; d < hd; d++) {
+          xb2Array[outOffset + d] += a * vCache[vOff + d];
+        }
+      }
     }
+  }
+
+  void _outputProjection(LayerWeights layer) {
+    final c = config;
+    final hs = c.hiddenSize;
+
+    layer.oProj.dotTo(xb, xb2);
+
+    xb.addTo(x.array, hs);
+  }
+
+  void _computeMLP(LayerWeights layer) {
+    final c = config;
+    final hs = c.hiddenSize;
+
+    final x = this.x;
+    final xArray = x.array;
+
+    final xb = this.xb;
+    final hb = this.hb;
+    final hb2 = this.hb2;
+
+    rmsNorm(xb, x, layer.postAttentionLayerNorm.data, hs, c.rmsNormEps);
+
+    layer.gateProj.dotTo(hb, xb);
+    layer.upProj.dotTo(hb2, xb);
+
+    final hbArray = hb.arrayView(buffer: hbViewBuffer);
+    final hb2Array = hb2.arrayView(buffer: hb2ViewBuffer);
+    final inter = c.intermediateSize;
+
+    for (int i = 0; i < inter; i++) {
+      hbArray[i] = silu(hbArray[i]) * hb2Array[i];
+    }
+
+    if (!hb.isInDartMemory) {
+      hb.setRange(0, hb.length, hbArray);
+    }
+
+    layer.downProj.dotTo(xb, hb);
+
+    xb.addTo(xArray, hs);
   }
 
   int sample(

@@ -1,13 +1,18 @@
 import 'dart:math' as math;
 
-import 'package:smollm2/src/quant_type.dart';
-
 import 'config.dart';
 import 'data.dart';
-import 'tensor.dart';
+import 'quant_type.dart';
+import 'runtime.dart';
+import 'tensor/tensor.dart';
 
 class LayerWeights {
+  final int index;
+
+  LayerWeights(this.index);
+
   late FP32Tensor inputLayerNorm;
+
   late Tensor qProj;
   late Tensor kProj;
   late Tensor vProj;
@@ -18,16 +23,147 @@ class LayerWeights {
   late Tensor gateProj;
   late Tensor upProj;
   late Tensor downProj;
+
+  List<Tensor> get tensors => [
+    inputLayerNorm,
+    qProj,
+    kProj,
+    vProj,
+    oProj,
+    postAttentionLayerNorm,
+    gateProj,
+    upProj,
+    downProj,
+  ];
+
+  Map<Type, int> get tensorsTypes {
+    final counts = <Type, int>{};
+
+    for (final tensor in tensors) {
+      counts.update(
+        tensor.runtimeType,
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
+    }
+
+    return counts;
+  }
+
+  void load(
+    Config config,
+    DataReader dataReader,
+    math.Random? jitterRandom,
+    double? jitterScale,
+  ) {
+    final quantType = config.quantType;
+    final hd = config.headDim;
+
+    ////
+
+    inputLayerNorm = FP32Tensor.readFrom(dataReader, config.hiddenSize);
+
+    ////
+
+    qProj = _readTensor(
+      dataReader,
+      config.numHeads * hd,
+      config.hiddenSize,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+      quantType: quantType,
+      asFP32: true,
+    );
+
+    kProj = _readTensor(
+      dataReader,
+      config.numKvHeads * hd,
+      config.hiddenSize,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+      quantType: quantType,
+      asFP32: true,
+    );
+
+    vProj = _readTensor(
+      dataReader,
+      config.numKvHeads * hd,
+      config.hiddenSize,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+      quantType: quantType,
+      asFP32: true,
+    );
+
+    oProj = _readTensor(
+      dataReader,
+      config.hiddenSize,
+      config.numHeads * hd,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+      quantType: quantType,
+      asFP32: true,
+    );
+
+    ////
+
+    postAttentionLayerNorm = FP32Tensor.readFrom(dataReader, config.hiddenSize);
+
+    ////
+
+    gateProj = _readTensor(
+      dataReader,
+      config.intermediateSize,
+      config.hiddenSize,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+      quantType: quantType,
+      asFP32: true,
+    );
+
+    upProj = _readTensor(
+      dataReader,
+      config.intermediateSize,
+      config.hiddenSize,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+      quantType: quantType,
+      asFP32: true,
+    );
+
+    downProj = _readTensor(
+      dataReader,
+      config.hiddenSize,
+      config.intermediateSize,
+      jitterRandom: jitterRandom,
+      jitterScale: jitterScale,
+      quantType: quantType,
+      asFP32: true,
+    );
+  }
 }
 
 class ModelWeights {
+  LoggerFunction? logger;
+
   final Config config;
 
-  ModelWeights(this.config);
+  ModelWeights(this.config, {this.logger});
+
+  void log(Object? o) {
+    final logger = this.logger;
+    if (logger != null) {
+      logger(o);
+    }
+  }
 
   late Tensor embedTokens;
+  late Float32ListX4 embedTokensArray;
+
   late List<LayerWeights> layers;
   late FP32Tensor finalNorm;
+
+  Map<Type, int> get layersTensorsTypes => layers.first.tensorsTypes;
 
   void load(
     Config config,
@@ -35,6 +171,19 @@ class ModelWeights {
     math.Random? jitterRandom,
     double? jitterScale,
   }) {
+    if (jitterRandom != null) {
+      jitterScale ??= config.quantType == QuantType.q8
+          ? Q8Tensor.defaultQ8DequantizationJitterScale
+          : Q16Tensor.defaultQ16DequantizationJitterScale;
+
+      log(
+        'Loading weights and dequantizing Q16 → FP32 with jitter injection '
+        '(jitterScale: $jitterScale)...',
+      );
+    } else {
+      log('Loading weights...');
+    }
+
     _loadEmbedTokens(config, dataReader, jitterRandom, jitterScale);
     _loadLayers(config, dataReader, jitterRandom, jitterScale);
     _loadFinalNorm(config, dataReader);
@@ -53,8 +202,15 @@ class ModelWeights {
       jitterRandom: jitterRandom,
       jitterScale: jitterScale,
       quantType: config.quantType,
-      fp32: true,
+      asFP32: true,
     );
+
+    embedTokensArray = embedTokens
+        .toFP32Tensor(cached: true)
+        .dataArray
+        .asFloat32ListX4;
+
+    log("├─ Loaded embed tokens ✅");
   }
 
   void _loadLayers(
@@ -63,211 +219,49 @@ class ModelWeights {
     math.Random? jitterRandom,
     double? jitterScale,
   ) {
-    final quantType = config.quantType;
-    final hd = config.headDim;
+    final numLayers = config.numLayers;
 
-    layers = List.generate(config.numLayers, (_) {
-      final lw = LayerWeights();
+    log("├─ Loading $numLayers layers...");
 
-      ////
+    layers = List.generate(numLayers, (i) {
+      final lw = LayerWeights(i);
+      lw.load(config, dataReader, jitterRandom, jitterScale);
 
-      lw.inputLayerNorm = FP32Tensor.readFrom(dataReader, config.hiddenSize);
-
-      ////
-
-      lw.qProj = _readTensor(
-        dataReader,
-        config.numHeads * hd,
-        config.hiddenSize,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-        quantType: quantType,
-        fp32: true,
+      i++;
+      log(
+        [
+          "│  ",
+          i == numLayers ? "└─" : "├─",
+          " Loaded layer $i/$numLayers ✅ ${lw.tensorsTypes}",
+        ].join(),
       );
-
-      lw.kProj = _readTensor(
-        dataReader,
-        config.numKvHeads * hd,
-        config.hiddenSize,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-        quantType: quantType,
-        fp32: true,
-      );
-
-      lw.vProj = _readTensor(
-        dataReader,
-        config.numKvHeads * hd,
-        config.hiddenSize,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-        quantType: quantType,
-        fp32: true,
-      );
-
-      lw.oProj = _readTensor(
-        dataReader,
-        config.hiddenSize,
-        config.numHeads * hd,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-        quantType: quantType,
-        fp32: true,
-      );
-
-      ////
-
-      lw.postAttentionLayerNorm = FP32Tensor.readFrom(
-        dataReader,
-        config.hiddenSize,
-      );
-
-      ////
-
-      lw.gateProj = _readTensor(
-        dataReader,
-        config.intermediateSize,
-        config.hiddenSize,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-        quantType: quantType,
-        fp32: true,
-      );
-
-      lw.upProj = _readTensor(
-        dataReader,
-        config.intermediateSize,
-        config.hiddenSize,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-        quantType: quantType,
-        fp32: true,
-      );
-
-      lw.downProj = _readTensor(
-        dataReader,
-        config.hiddenSize,
-        config.intermediateSize,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-        quantType: quantType,
-        fp32: true,
-      );
-
       return lw;
     });
+
+    log("├─ Loaded ${layers.length} layers ✅");
   }
 
   void _loadFinalNorm(Config config, DataReader dataReader) {
     finalNorm = FP32Tensor.readFrom(dataReader, config.hiddenSize);
-  }
 
-  Tensor _readTensor(
-    DataReader br,
-    int rows,
-    int cols, {
-    required QuantType quantType,
-    bool fp32 = false,
-    math.Random? jitterRandom,
-    double? jitterScale,
-  }) {
-    switch (quantType) {
-      case QuantType.q8:
-        return _readQ8(
-          br,
-          rows,
-          cols,
-          jitterRandom: jitterRandom,
-          jitterScale:
-              jitterScale ?? Q8Tensor.defaultQ8DequantizationJitterScale,
-          fp32: fp32,
-        );
-      case QuantType.q16:
-        return _readQ16(
-          br,
-          rows,
-          cols,
-          jitterRandom: jitterRandom,
-          jitterScale:
-              jitterScale ?? Q16Tensor.defaultQ16DequantizationJitterScale,
-          fp32: fp32,
-        );
-      case QuantType.bf16:
-        return _readBF16(
-          br,
-          rows,
-          cols,
-          jitterRandom: jitterRandom,
-          jitterScale:
-              jitterScale ?? Q16Tensor.defaultQ16DequantizationJitterScale,
-          fp32: fp32,
-        );
-      default:
-        throw UnsupportedError("quantType: $quantType");
-    }
-  }
-
-  Tensor _readQ8(
-    DataReader br,
-    int rows,
-    int cols, {
-    bool fp32 = false,
-    math.Random? jitterRandom,
-    double jitterScale = Q8Tensor.defaultQ8DequantizationJitterScale,
-  }) {
-    final q8 = Q8Tensor.readFrom(br, rows, cols);
-
-    if (fp32) {
-      return q8.toFP32Tensor(
-        cached: false,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-      );
-    }
-
-    return q8;
-  }
-
-  Tensor _readQ16(
-    DataReader br,
-    int rows,
-    int cols, {
-    bool fp32 = false,
-    math.Random? jitterRandom,
-    double jitterScale = Q16Tensor.defaultQ16DequantizationJitterScale,
-  }) {
-    final q16 = Q16Tensor.readFrom(br, rows, cols);
-    //final q16 = Q16PerBlockTensor.readFrom(br, rows, cols);
-
-    if (fp32) {
-      return q16.toFP32Tensor(
-        cached: false,
-        jitterRandom: jitterRandom,
-        jitterScale: jitterScale,
-      );
-    }
-
-    return q16;
-  }
-
-  Tensor _readBF16(
-    DataReader br,
-    int rows,
-    int cols, {
-    bool fp32 = false,
-    math.Random? jitterRandom,
-    double jitterScale = Q16Tensor.defaultQ16DequantizationJitterScale,
-  }) {
-    final bf16 = BF16Tensor.readFromH(br, rows, cols);
-
-    if (fp32) {
-      return bf16.toFP32Tensor(cached: false);
-    }
-
-    return bf16;
+    log("└─ Loaded final normalization layer ✅");
   }
 
   @override
   String toString() =>
       'ModelWeights{embedTokens: $embedTokens, layers: ${layers.length}, finalNorm: $finalNorm}';
+}
+
+final TensorFactory _tensorFactory = TensorFactory.instance..load();
+
+Tensor _readTensor(
+  DataReader br,
+  int rows,
+  int cols, {
+  required QuantType quantType,
+  bool asFP32 = false,
+  math.Random? jitterRandom,
+  double? jitterScale,
+}) {
+  return _tensorFactory.readTensor(quantType, br, rows, cols, asFP32: asFP32);
 }

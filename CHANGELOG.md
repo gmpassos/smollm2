@@ -1,3 +1,26 @@
+## 1.0.8
+
+- Added native tensor support for macOS CPU and Metal, and Windows CUDA backends.
+- Updated `LLMRuntime` to use `TensorFloat32Data` abstraction for tensor data, supporting native and Dart implementations.
+- Refactored tensor classes:
+  - Introduced `TensorFloat32Data` wrapper for Float32List with SIMD views.
+  - Added `DartTensor` implementations for Q8, Q16, BF16, and FP32 tensors with dot product optimized for SIMD.
+  - Added native tensor implementations for macOS CPU (`FP32CPUTensor`), macOS Metal (`FP32MetalTensor`), and Windows CUDA (`FP32CudaTensor`).
+- `QuantType` enum extended with `quantized` boolean field to distinguish quantized types.
+- `ModelWeights` and `LayerWeights`:
+  - Refactored tensor loading to use unified `_readTensor` method from `TensorFactory`.
+  - Added jittered dequantization support during weight loading.
+  - Added logging hooks for weight loading progress.
+  - LayerWeights now track tensor types and support loading all tensors with quantization and jitter options.
+- `LLMRuntime`:
+  - Refactored forward pass to use native or Dart tensor implementations transparently.
+  - Split forward pass into smaller methods for RMS norm, QKV projection, RoPE application, KV cache write, self-attention, output projection, and MLP.
+  - Added attention scaling and optimized logits computation using SIMD.
+- Added `TensorFactory` singleton to manage tensor readers and tensor creation.
+- Added `DartTensorReader` and native tensor readers for BF16 on CPU, Metal, and CUDA.
+- `.gitignore` updated to ignore virtual environments, native libraries, debug symbols, and CUDA build artifacts.
+- Added `ffi` dependency in `pubspec.yaml`.
+
 ## 1.0.7
 
 - Added `LLMTokenGenerator` class implementing token generation backed by `LLMRuntime`.

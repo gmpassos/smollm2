@@ -1,13 +1,14 @@
 enum QuantType {
-  q8(1),
-  q16(2),
-  q16PerBlock(3),
-  bf16(4),
-  fp32(5);
+  q8(1, true),
+  q16(2, true),
+  q16PerBlock(3, true),
+  bf16(4, true),
+  fp32(5, false);
 
   final int value;
+  final bool quantized;
 
-  const QuantType(this.value);
+  const QuantType(this.value, this.quantized);
 
   factory QuantType.withValue(int value) {
     for (var e in QuantType.values) {

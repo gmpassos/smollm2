@@ -7,7 +7,31 @@
 pubspec.lock
 
 models/
+venv/
 
 .DS_Store
 
 *.exe
+
+# Native dynamic libraries
+*.dylib
+*.dll
+*.so
+
+# Native static libraries
+*.a
+*.lib
+
+# Native object files
+*.o
+*.obj
+
+# Debug symbols / debug builds
+*.pdb
+*.dSYM/
+
+# CUDA
+*.exp
+*.ilk
+*.manifest
+
