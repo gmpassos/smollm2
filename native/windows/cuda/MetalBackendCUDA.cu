@@ -1,4 +1,4 @@
-// MetalBackendCUDA.cpp
+// MetalBackendCUDA.cu
 // Windows CUDA backend equivalent for MetalBackend.swift
 
 #include <cuda_runtime.h>
@@ -9,15 +9,31 @@
 #include <stdexcept>
 
 // ============================================================
-// CUDA CHECK
+// CUDA CHECK HELPERS
 // ============================================================
 
-#define CUDA_CHECK(x)                                                     \
-do {                                                                      \
-    cudaError_t err = (x);                                                \
-    if (err != cudaSuccess) {                                             \
-        throw std::runtime_error(cudaGetErrorString(err));                \
-    }                                                                     \
+#define CUDA_CHECK_THROW(x)                                      \
+do {                                                             \
+    cudaError_t err = (x);                                       \
+    if (err != cudaSuccess) {                                    \
+        throw std::runtime_error(cudaGetErrorString(err));       \
+    }                                                            \
+} while (0)
+
+#define CUDA_CHECK_RETURN(x)                                     \
+do {                                                             \
+    cudaError_t err = (x);                                       \
+    if (err != cudaSuccess) {                                    \
+        return;                                                  \
+    }                                                            \
+} while (0)
+
+#define CUDA_CHECK_RETURN_NULL(x)                                \
+do {                                                             \
+    cudaError_t err = (x);                                       \
+    if (err != cudaSuccess) {                                    \
+        return nullptr;                                          \
+    }                                                            \
 } while (0)
 
 // ============================================================
@@ -31,7 +47,8 @@ __global__ void matmul_kernel(
     uint32_t rows,
     uint32_t cols
 ) {
-    uint32_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t gid =
+        blockIdx.x * blockDim.x + threadIdx.x;
 
     // IMPORTANT:
     // CUDA launches rounded-up thread counts.
@@ -76,21 +93,27 @@ public:
     }
 
     void ensureBuffers(int rows, int cols) {
+
         if (rows <= 0 || cols <= 0) {
-            throw std::runtime_error("Invalid rows/cols");
+            throw std::runtime_error(
+                "Invalid rows/cols"
+            );
         }
 
-        const size_t weightsSize = static_cast<size_t>(rows) *
-                                   static_cast<size_t>(cols) *
-                                   sizeof(float);
+        const size_t weightsSize =
+            static_cast<size_t>(rows) *
+            static_cast<size_t>(cols) *
+            sizeof(float);
 
-        const size_t inputSize = static_cast<size_t>(cols) *
-                                 sizeof(float);
+        const size_t inputSize =
+            static_cast<size_t>(cols) *
+            sizeof(float);
 
-        const size_t outputSize = static_cast<size_t>(rows) *
-                                  sizeof(float);
+        const size_t outputSize =
+            static_cast<size_t>(rows) *
+            sizeof(float);
 
-        bool ok =
+        bool alreadyValid =
             weightsBuffer != nullptr &&
             inputBuffer != nullptr &&
             outputBuffer != nullptr &&
@@ -98,7 +121,7 @@ public:
             inputCapacityBytes >= inputSize &&
             outputCapacityBytes >= outputSize;
 
-        if (ok) {
+        if (alreadyValid) {
             return;
         }
 
@@ -109,10 +132,15 @@ public:
         if (weightsCapacityBytes < weightsSize) {
 
             if (weightsBuffer != nullptr) {
-                CUDA_CHECK(cudaFree(weightsBuffer));
+                CUDA_CHECK_THROW(
+                    cudaFree(weightsBuffer)
+                );
             }
 
-            CUDA_CHECK(cudaMalloc(&weightsBuffer, weightsSize));
+            CUDA_CHECK_THROW(cudaMalloc(
+                &weightsBuffer,
+                weightsSize
+            ));
 
             weightsCapacityBytes = weightsSize;
         }
@@ -124,10 +152,15 @@ public:
         if (inputCapacityBytes < inputSize) {
 
             if (inputBuffer != nullptr) {
-                CUDA_CHECK(cudaFree(inputBuffer));
+                CUDA_CHECK_THROW(
+                    cudaFree(inputBuffer)
+                );
             }
 
-            CUDA_CHECK(cudaMalloc(&inputBuffer, inputSize));
+            CUDA_CHECK_THROW(cudaMalloc(
+                &inputBuffer,
+                inputSize
+            ));
 
             inputCapacityBytes = inputSize;
         }
@@ -139,10 +172,15 @@ public:
         if (outputCapacityBytes < outputSize) {
 
             if (outputBuffer != nullptr) {
-                CUDA_CHECK(cudaFree(outputBuffer));
+                CUDA_CHECK_THROW(
+                    cudaFree(outputBuffer)
+                );
             }
 
-            CUDA_CHECK(cudaMalloc(&outputBuffer, outputSize));
+            CUDA_CHECK_THROW(cudaMalloc(
+                &outputBuffer,
+                outputSize
+            ));
 
             outputCapacityBytes = outputSize;
         }
@@ -154,17 +192,17 @@ public:
     void destroyBuffers() {
 
         if (weightsBuffer != nullptr) {
-            CUDA_CHECK(cudaFree(weightsBuffer));
+            cudaFree(weightsBuffer);
             weightsBuffer = nullptr;
         }
 
         if (inputBuffer != nullptr) {
-            CUDA_CHECK(cudaFree(inputBuffer));
+            cudaFree(inputBuffer);
             inputBuffer = nullptr;
         }
 
         if (outputBuffer != nullptr) {
-            CUDA_CHECK(cudaFree(outputBuffer));
+            cudaFree(outputBuffer);
             outputBuffer = nullptr;
         }
 
@@ -194,7 +232,7 @@ public:
             static_cast<size_t>(cols) *
             sizeof(float);
 
-        CUDA_CHECK(cudaMemcpy(
+        CUDA_CHECK_THROW(cudaMemcpy(
             weightsBuffer,
             weights,
             size,
@@ -218,14 +256,16 @@ public:
         assert(dstStart >= 0);
         assert(srcStart >= 0);
 
-        const int totalWeights = bufferRows * bufferCols;
+        const int totalWeights =
+            bufferRows * bufferCols;
 
         assert(srcStart + length <= totalWeights);
 
-        CUDA_CHECK(cudaMemcpy(
+        CUDA_CHECK_THROW(cudaMemcpy(
             dst + dstStart,
             weightsBuffer + srcStart,
-            static_cast<size_t>(length) * sizeof(float),
+            static_cast<size_t>(length) *
+            sizeof(float),
             cudaMemcpyDeviceToHost
         ));
     }
@@ -246,10 +286,11 @@ public:
 
         assert(srcStart + length <= bufferRows);
 
-        CUDA_CHECK(cudaMemcpy(
+        CUDA_CHECK_THROW(cudaMemcpy(
             dst + dstStart,
             outputBuffer + srcStart,
-            static_cast<size_t>(length) * sizeof(float),
+            static_cast<size_t>(length) *
+            sizeof(float),
             cudaMemcpyDeviceToHost
         ));
     }
@@ -277,8 +318,8 @@ public:
             static_cast<uint32_t>(cols)
         );
 
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK_THROW(cudaGetLastError());
+        CUDA_CHECK_THROW(cudaDeviceSynchronize());
     }
 
     // ============================================================
@@ -297,10 +338,11 @@ public:
 
         ensureBuffers(rows, cols);
 
-        CUDA_CHECK(cudaMemcpy(
+        CUDA_CHECK_THROW(cudaMemcpy(
             inputBuffer,
             input,
-            static_cast<size_t>(cols) * sizeof(float),
+            static_cast<size_t>(cols) *
+            sizeof(float),
             cudaMemcpyHostToDevice
         ));
 
@@ -311,10 +353,11 @@ public:
             cols
         );
 
-        CUDA_CHECK(cudaMemcpy(
+        CUDA_CHECK_THROW(cudaMemcpy(
             output,
             outputBuffer,
-            static_cast<size_t>(rows) * sizeof(float),
+            static_cast<size_t>(rows) *
+            sizeof(float),
             cudaMemcpyDeviceToHost
         ));
     }
@@ -342,10 +385,11 @@ public:
             cols
         );
 
-        CUDA_CHECK(cudaMemcpy(
+        CUDA_CHECK_THROW(cudaMemcpy(
             output,
             outputBuffer,
-            static_cast<size_t>(rows) * sizeof(float),
+            static_cast<size_t>(rows) *
+            sizeof(float),
             cudaMemcpyDeviceToHost
         ));
     }
@@ -366,10 +410,11 @@ public:
 
         ensureBuffers(rows, cols);
 
-        CUDA_CHECK(cudaMemcpy(
+        CUDA_CHECK_THROW(cudaMemcpy(
             inputBuffer,
             input,
-            static_cast<size_t>(cols) * sizeof(float),
+            static_cast<size_t>(cols) *
+            sizeof(float),
             cudaMemcpyHostToDevice
         ));
 
@@ -412,15 +457,33 @@ public:
 
 extern "C" {
 
+// ============================================================
+// CREATE / DESTROY
+// ============================================================
+
 __declspec(dllexport)
 void* cuda_create() {
-    return new CudaBackend();
+
+    try {
+        return new CudaBackend();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 __declspec(dllexport)
 void cuda_destroy(void* ptr) {
+
+    if (ptr == nullptr) {
+        return;
+    }
+
     delete static_cast<CudaBackend*>(ptr);
 }
+
+// ============================================================
+// SET WEIGHTS
+// ============================================================
 
 __declspec(dllexport)
 void cuda_set_weights(
@@ -429,14 +492,29 @@ void cuda_set_weights(
     int32_t rows,
     int32_t cols
 ) {
-    auto* backend = static_cast<CudaBackend*>(ptr);
+    if (ptr == nullptr) {
+        return;
+    }
 
-    backend->setWeights(
-        weights,
-        static_cast<int>(rows),
-        static_cast<int>(cols)
-    );
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->setWeights(
+            weights,
+            static_cast<int>(rows),
+            static_cast<int>(cols)
+        );
+
+    } catch (...) {
+        return;
+    }
 }
+
+// ============================================================
+// COPY WEIGHTS
+// ============================================================
 
 __declspec(dllexport)
 void cuda_copy_weights(
@@ -446,15 +524,30 @@ void cuda_copy_weights(
     int srcStart,
     int length
 ) {
-    auto* backend = static_cast<CudaBackend*>(ptr);
+    if (ptr == nullptr) {
+        return;
+    }
 
-    backend->copyWeights(
-        dst,
-        dstStart,
-        srcStart,
-        length
-    );
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->copyWeights(
+            dst,
+            dstStart,
+            srcStart,
+            length
+        );
+
+    } catch (...) {
+        return;
+    }
 }
+
+// ============================================================
+// COPY OUTPUT
+// ============================================================
 
 __declspec(dllexport)
 void cuda_copy_output(
@@ -464,15 +557,30 @@ void cuda_copy_output(
     int srcStart,
     int length
 ) {
-    auto* backend = static_cast<CudaBackend*>(ptr);
+    if (ptr == nullptr) {
+        return;
+    }
 
-    backend->copyOutput(
-        dst,
-        dstStart,
-        srcStart,
-        length
-    );
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->copyOutput(
+            dst,
+            dstStart,
+            srcStart,
+            length
+        );
+
+    } catch (...) {
+        return;
+    }
 }
+
+// ============================================================
+// MATMUL
+// ============================================================
 
 __declspec(dllexport)
 void cuda_matmul(
@@ -482,15 +590,30 @@ void cuda_matmul(
     int rows,
     int cols
 ) {
-    auto* backend = static_cast<CudaBackend*>(ptr);
+    if (ptr == nullptr) {
+        return;
+    }
 
-    backend->matmul(
-        input,
-        output,
-        rows,
-        cols
-    );
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->matmul(
+            input,
+            output,
+            rows,
+            cols
+        );
+
+    } catch (...) {
+        return;
+    }
 }
+
+// ============================================================
+// GPU INPUT BUFFER
+// ============================================================
 
 __declspec(dllexport)
 void cuda_matmul_input_cudabuffer(
@@ -500,15 +623,30 @@ void cuda_matmul_input_cudabuffer(
     int rows,
     int cols
 ) {
-    auto* backend = static_cast<CudaBackend*>(ptr);
+    if (ptr == nullptr) {
+        return;
+    }
 
-    backend->matmulInputCudaBuffer(
-        static_cast<float*>(inputBuffer),
-        output,
-        rows,
-        cols
-    );
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->matmulInputCudaBuffer(
+            static_cast<float*>(inputBuffer),
+            output,
+            rows,
+            cols
+        );
+
+    } catch (...) {
+        return;
+    }
 }
+
+// ============================================================
+// GPU OUTPUT BUFFER
+// ============================================================
 
 __declspec(dllexport)
 void cuda_matmul_output_cudabuffer(
@@ -518,15 +656,30 @@ void cuda_matmul_output_cudabuffer(
     int rows,
     int cols
 ) {
-    auto* backend = static_cast<CudaBackend*>(ptr);
+    if (ptr == nullptr) {
+        return;
+    }
 
-    backend->matmulOutputCudaBuffer(
-        input,
-        static_cast<float*>(outputBuffer),
-        rows,
-        cols
-    );
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->matmulOutputCudaBuffer(
+            input,
+            static_cast<float*>(outputBuffer),
+            rows,
+            cols
+        );
+
+    } catch (...) {
+        return;
+    }
 }
+
+// ============================================================
+// GPU INPUT + OUTPUT BUFFERS
+// ============================================================
 
 __declspec(dllexport)
 void cuda_matmul_input_output_cudabuffer(
@@ -536,24 +689,40 @@ void cuda_matmul_input_output_cudabuffer(
     int rows,
     int cols
 ) {
-    auto* backend = static_cast<CudaBackend*>(ptr);
+    if (ptr == nullptr) {
+        return;
+    }
 
-    backend->matmulInputOutputCudaBuffer(
-        static_cast<float*>(inputBuffer),
-        static_cast<float*>(outputBuffer),
-        rows,
-        cols
-    );
+    try {
+
+        auto* backend =
+            static_cast<CudaBackend*>(ptr);
+
+        backend->matmulInputOutputCudaBuffer(
+            static_cast<float*>(inputBuffer),
+            static_cast<float*>(outputBuffer),
+            rows,
+            cols
+        );
+
+    } catch (...) {
+        return;
+    }
 }
+
+// ============================================================
+// BUFFER CREATE / DESTROY
+// ============================================================
 
 __declspec(dllexport)
 void* cuda_create_float_buffer(int size) {
 
     float* ptr = nullptr;
 
-    CUDA_CHECK(cudaMalloc(
+    CUDA_CHECK_RETURN_NULL(cudaMalloc(
         &ptr,
-        static_cast<size_t>(size) * sizeof(float)
+        static_cast<size_t>(size) *
+        sizeof(float)
     ));
 
     return ptr;
@@ -561,8 +730,17 @@ void* cuda_create_float_buffer(int size) {
 
 __declspec(dllexport)
 void cuda_destroy_buffer(void* ptr) {
-    CUDA_CHECK(cudaFree(ptr));
+
+    if (ptr == nullptr) {
+        return;
+    }
+
+    CUDA_CHECK_RETURN(cudaFree(ptr));
 }
+
+// ============================================================
+// SET RANGE
+// ============================================================
 
 __declspec(dllexport)
 void cuda_set_range(
@@ -572,13 +750,18 @@ void cuda_set_range(
     int srcStart,
     int count
 ) {
-    CUDA_CHECK(cudaMemcpy(
+    CUDA_CHECK_RETURN(cudaMemcpy(
         static_cast<float*>(ptr) + dstStart,
         src + srcStart,
-        static_cast<size_t>(count) * sizeof(float),
+        static_cast<size_t>(count) *
+        sizeof(float),
         cudaMemcpyHostToDevice
     ));
 }
+
+// ============================================================
+// COPY DATA TO
+// ============================================================
 
 __declspec(dllexport)
 void cuda_copy_data_to(
@@ -588,13 +771,18 @@ void cuda_copy_data_to(
     int dstStart,
     int count
 ) {
-    CUDA_CHECK(cudaMemcpy(
+    CUDA_CHECK_RETURN(cudaMemcpy(
         dst + dstStart,
         static_cast<float*>(ptr) + srcStart,
-        static_cast<size_t>(count) * sizeof(float),
+        static_cast<size_t>(count) *
+        sizeof(float),
         cudaMemcpyDeviceToHost
     ));
 }
+
+// ============================================================
+// ADD GPU BUFFER TO CPU BUFFER
+// ============================================================
 
 __declspec(dllexport)
 void add_gpu_buffer_to_cpu_buffer(
@@ -604,12 +792,18 @@ void add_gpu_buffer_to_cpu_buffer(
 ) {
     float* tmp = new float[length];
 
-    CUDA_CHECK(cudaMemcpy(
+    cudaError_t err = cudaMemcpy(
         tmp,
         gpuBuffer,
-        static_cast<size_t>(length) * sizeof(float),
+        static_cast<size_t>(length) *
+        sizeof(float),
         cudaMemcpyDeviceToHost
-    ));
+    );
+
+    if (err != cudaSuccess) {
+        delete[] tmp;
+        return;
+    }
 
     for (int i = 0; i < length; i++) {
         cpuBuffer[i] += tmp[i];
