@@ -16,7 +16,7 @@ class CudaLibrary extends NativeLibrary<CudaBinding> {
 
   @override
   File? tryResolveLibraryFile() {
-    return File(r'C:\smollm2\native\windows\cuda\build\cuda_backend.dll');
+    return File(r'C:\Users\a7\llama\gh-tmp\smollm2\native\windows\cuda\build\cuda_backend.dll');
   }
 
   @override
